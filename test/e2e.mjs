@@ -299,6 +299,51 @@ await page.hover("#dstGrid .blockbox >> nth=0");
 check("ホバーでラベルが出る",
   await page.$eval("#dstGrid .blockbox >> nth=0 >> .tag", (n) => getComputedStyle(n).visibility === "visible"));
 
+// 「1回ぶん配置 → 今の配置から作る → 繰り返しにする」の流れ
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript(`シート追加 まとめ
+売上明細の10行目をまとめのA1に置く
+支店別サマリの10行目を右に続けて置く`, true);
+});
+await page.click("#scFromBlocks");
+await page.click("#scRepeat");
+const wrapped = await page.inputValue("#scText");
+check("繰り返しにするで包まれる",
+  /繰り返し 行 = 10\n {2}売上明細のA\{行\}:E\{行\}をまとめのA1に置く\n {2}支店別サマリのA\{行\}:C\{行\}をまとめのF1に置く\nここまで/.test(wrapped),
+  wrapped.split("\n").filter((l) => /繰り返し|\{行\}|ここまで/.test(l)).join(" / "));
+check("シート追加は繰り返しの外に残る",
+  /シート追加 まとめ\n繰り返し/.test(wrapped),
+  wrapped.split("\n").filter((l) => /シート追加/.test(l)).join(","));
+check("値の欄が選択された状態になる",
+  await page.evaluate(() => {
+    const ta = document.getElementById("scText");
+    return ta.value.slice(ta.selectionStart, ta.selectionEnd);
+  }) === "10");
+
+// 選択部分に値を足してそのまま実行できる
+await page.evaluate(() => {
+  const ta = document.getElementById("scText");
+  ta.value = ta.value.replace("繰り返し 行 = 10", "繰り返し 行 = 10, 12, 17, 20");
+});
+await page.click("#scRun");
+await page.waitForTimeout(200);
+const wrapDest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
+check("包んだ手順書がそのまま4周ぶん動く",
+  wrapDest.join(",") === "まとめ!A1,まとめ!F1,まとめ!A2,まとめ!F2,まとめ!A3,まとめ!F3,まとめ!A4,まとめ!F4",
+  wrapDest.join(","));
+
+// 数字を含むシート名を行番号として巻き込まない
+const guarded = await page.evaluate(() => {
+  const A = window.__app;
+  A.S.sheets.push({ name: "支店10", ws: {}, rows: 1, cols: 1, usedRows: 1, usedCols: 1, merges: [], colsMeta: [] });
+  const r = A.commonRowNumber(["支店10のA10:E10"]);
+  A.S.sheets.pop();
+  return r;
+});
+check("シート名の数字も候補には入る（保護は置換時）", guarded === "10", String(guarded));
+
 // 保存 → 別の手順書に差し替え → 読み戻し
 await page.fill("#scName", "月次テスト");
 await page.click("#scSave");
@@ -308,11 +353,17 @@ check("保存した手順書を読み戻せる", (await page.inputValue("#scText
 check("保存件数が表示される", /保存済み 1件/.test(await page.textContent("#recipeState")));
 
 // 別ブラウザの人に渡す想定でファイルに書き出す
+const onScreen = await page.inputValue("#scText");
 const [dl3] = await Promise.all([page.waitForEvent("download"), page.click("#scExport")]);
 check("手順書をファイルに書き出せる", dl3.suggestedFilename() === "月次テスト.txt", dl3.suggestedFilename());
 const exported = join(tmp, "recipe.txt");
 await dl3.saveAs(exported);
-check("書き出した手順書がそのまま読める文章", readFileSync(exported, "utf8").includes("売上明細の{行}行目を続けて置く"));
+const exportedText = readFileSync(exported, "utf8");
+check("書き出した内容が画面の手順書と一致する", exportedText === onScreen,
+  `${exportedText.length}文字 / ${onScreen.length}文字`);
+check("書き出した手順書がそのまま読める文章",
+  /繰り返し .+ = /.test(exportedText) && /に置く/.test(exportedText),
+  exportedText.split("\n")[0]);
 
 // 存在しないシートは黙って別シートに逃げず、行番号つきで止まる
 await page.fill("#scText", "存在しないシートのA1:B2を抜粋1のA1に置く");
