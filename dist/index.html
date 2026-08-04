@@ -341,18 +341,24 @@ body.stacked .splitter::after {
 }
 .gcanvas { position: relative; }
 .gcells, .govl, .gcolh, .growh, .gcorner, .gfrz, .gfrzhead { position: absolute; top: 0; left: 0; }
-.gfrzhead { z-index: 9; }
 .govl { pointer-events: none; z-index: 6; }
-/* 固定した行・列。スクロールに合わせて位置を戻すことで貼り付いて見える。
-   中のセルは見出し幅を含んだ絶対座標を持つので、層は必ず左上 (0,0) から始める。
+/* 見出しと固定した行・列を画面に貼り付ける入れ物。大きさ 0 なので流れを乱さず、
+   位置はブラウザ（合成側）が決めるためスクロールとぴったり同じ動きになる。
+   JS でスクロール量ぶんずらしていたころは、1 フレーム遅れたり小数のスクロール量と
+   食い違ったりして、固定した部分が細かく震えていた */
+.gpin { position: sticky; width: 0; height: 0; }
+.gpin-v { top: 0; }
+.gpin-h { left: 0; }
+.gpin-b { top: 0; left: 0; }
+/* 固定した行・列。中のセルは見出し幅を含んだ絶対座標を持つので、層は必ず左上 (0,0) から始める。
    境界線は box-shadow で描く（border だと内側が削れて最後の行が欠ける） */
-.gfrz { z-index: 5; overflow: hidden; background: var(--surface); }
-.gfrz-top { width: 100%; box-shadow: 0 2px 0 0 var(--src-line); }
-.gfrz-left { height: 100%; box-shadow: 2px 0 0 0 var(--src-line); }
-.gfrz-corner { z-index: 7; box-shadow: 2px 0 0 0 var(--src-line), 0 2px 0 0 var(--src-line); }
-.gcolh { z-index: 8; height: var(--hh); }
-.growh { z-index: 8; width: var(--hw); }
-.gcorner { z-index: 9; width: var(--hw); height: var(--hh); background: var(--panel); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.gfrz { overflow: hidden; background: var(--surface); }
+.gfrz-top { box-shadow: 0 2px 0 0 var(--src-line); }
+.gfrz-left { box-shadow: 2px 0 0 0 var(--src-line); }
+.gfrz-corner { box-shadow: 2px 0 0 0 var(--src-line), 0 2px 0 0 var(--src-line); }
+.gcolh { height: var(--hh); }
+.growh { width: var(--hw); }
+.gcorner { width: var(--hw); height: var(--hh); background: var(--panel); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 
 .gc {
   position: absolute; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
@@ -1037,10 +1043,31 @@ function makeGrid(wrap, opts) {
   var rowh = el("div", "growh");
   var frzHead = el("div", "gfrzhead");   // 固定した行・列の見出し（縦横どちらにも追従する）
   var corner = el("div", "gcorner");
-  canvas.appendChild(cells); canvas.appendChild(ovl);
-  canvas.appendChild(frzTop); canvas.appendChild(frzLeft); canvas.appendChild(frzCorner);
-  canvas.appendChild(colh); canvas.appendChild(rowh);
-  canvas.appendChild(frzHead); canvas.appendChild(corner);
+  /**
+   * 貼り付いて見せる層は、大きさ 0 の position:sticky の入れ物に入れる。
+   * sticky はブラウザ（合成側）が位置を決めるので、スクロールとぴったり同じ
+   * タイミングで動く。JS で毎回ずらしていたころは 1 フレーム遅れたり、
+   * 小数のスクロール量とわずかに食い違ったりして、固定した部分が細かく震えていた。
+   *   v … 縦だけ貼り付く（横は中身と一緒に動く）
+   *   h … 横だけ貼り付く
+   *   b … 縦横とも貼り付く
+   * 重なり順は入れ物側で決める（中の層は既定のまま重ねる）。
+   */
+  function pin(axis, z, child) {
+    var n = el("div", "gpin gpin-" + axis);
+    n.style.zIndex = z;
+    n.appendChild(child);
+    canvas.appendChild(n);
+  }
+  canvas.appendChild(cells);
+  pin("v", 5, frzTop);
+  pin("h", 5, frzLeft);
+  canvas.appendChild(ovl);              // 選択枠・ブロック枠は固定した帯より上
+  pin("b", 7, frzCorner);
+  pin("v", 8, colh);
+  pin("h", 8, rowh);
+  pin("b", 9, frzHead);
+  pin("b", 9, corner);
   wrap.innerHTML = ""; wrap.appendChild(canvas);
 
   var G = {
@@ -1081,6 +1108,9 @@ function makeGrid(wrap, opts) {
     G.freeze = o.freeze || { r: 0, c: 0 };
     canvas.style.width = (HW + x) + "px";
     canvas.style.height = (HH + y) + "px";
+    // 貼り付ける入れ物は大きさ 0 なので、帯の伸びる向きは実寸で持たせる（% は使えない）
+    frzTop.style.width = (HW + x) + "px";
+    frzLeft.style.height = (HH + y) + "px";
     // 内容が小さくなったとき、前のスクロール位置が範囲外のまま残ると
     // 端の 1 列だけを描いた状態になる。ここで収まる範囲へ戻しておく
     wrap.scrollLeft = Math.min(wrap.scrollLeft, Math.max(0, HW + x - wrap.clientWidth));
@@ -1123,23 +1153,6 @@ function makeGrid(wrap, opts) {
     return n;
   }
 
-  /**
-   * 見出しと固定した行・列を、スクロール量ぶん逆に動かして画面に貼り付ける。
-   * 描き直しとは切り離しておくこと。描き直しの中でだけ動かしていたころは、
-   * 同じ範囲を描いたままの細かいスクロールで見出しだけが取り残され、
-   * 固定した列の中身と列名が横にずれていった
-   */
-  function syncLayers() {
-    var st = wrap.scrollTop, sl = wrap.scrollLeft;
-    colh.style.transform = "translateY(" + st + "px)";
-    rowh.style.transform = "translateX(" + sl + "px)";
-    corner.style.transform = "translate(" + sl + "px," + st + "px)";
-    frzTop.style.transform = "translateY(" + st + "px)";
-    frzLeft.style.transform = "translateX(" + sl + "px)";
-    frzCorner.style.transform = "translate(" + sl + "px," + st + "px)";
-    frzHead.style.transform = "translate(" + sl + "px," + st + "px)";
-  }
-
   G.draw = function () {
     var st = wrap.scrollTop, sl = wrap.scrollLeft;
     var vh = wrap.clientHeight, vw = wrap.clientWidth;
@@ -1151,8 +1164,6 @@ function makeGrid(wrap, opts) {
     var r1 = clamp(findIdx(G.rowY, st + vh - HH, G.rows) + 2, 0, G.rows - 1);
     var c0 = clamp(findIdx(G.colX, sl - HW, G.cols) - 1, 0, G.cols - 1);
     var c1 = clamp(findIdx(G.colX, sl + vw - HW, G.cols) + 1, 0, G.cols - 1);
-    syncLayers();
-
     var key = r0 + ":" + r1 + ":" + c0 + ":" + c1 + ":" + fz.r + ":" + fz.c;
     if (G.win === key) return;
     G.win = key;
@@ -1261,10 +1272,7 @@ function makeGrid(wrap, opts) {
     if (left - HW - fzW < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, left - HW - fzW - w);
     if (left + w > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = left + w - wrap.clientWidth + 8;
   };
-  // 貼り付いて見せている層は、スクロールの通知の中でその場で動かす。
-  // 描き直し（rAF）の中だけで動かすと 1 フレーム遅れて追いかける形になり、
-  // 素早く動かしたときに固定した行・列が細かく震えて見える
-  wrap.addEventListener("scroll", function () { syncLayers(); G.schedule(); }, { passive: true });
+  wrap.addEventListener("scroll", G.schedule, { passive: true });
   // 並べ方の切り替えや全画面など、外側の都合で大きさが変わっても描き直す。
   // 呼び出し側の再描画に頼ると、レイアウトが確定する前に描いて中途半端になる
   if (window.ResizeObserver) new ResizeObserver(G.schedule).observe(wrap);

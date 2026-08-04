@@ -947,6 +947,24 @@ check("固定した列名は中身の真上から動かない",
   JSON.stringify(drifts.map((d) => d.gaps)));
 check("固定した列そのものも左端に貼り付いたまま",
   drifts.every((d) => d.band === 0), JSON.stringify(drifts.map((d) => d.band)));
+// 貼り付けはブラウザ任せ（position:sticky）にしておく。JS でスクロール量ぶん
+// ずらすやり方に戻すと、1 フレーム遅れや小数のずれで固定した部分が細かく震える
+const pinning = await page.evaluate(() => {
+  const pins = [...document.querySelectorAll("#srcGrid .gpin")];
+  const layers = ["gcolh", "growh", "gcorner", "gfrz-top", "gfrz-left", "gfrz-corner", "gfrzhead"];
+  return {
+    n: pins.length,
+    allSticky: pins.every((n) => getComputedStyle(n).position === "sticky"),
+    noTransform: layers.every((c) => {
+      const n = document.querySelector("#srcGrid ." + c);
+      if (!n) return true;
+      const t = getComputedStyle(n).transform;
+      return t === "none" || t === "matrix(1, 0, 0, 1, 0, 0)";
+    }),
+  };
+});
+check("貼り付けはブラウザ任せ（sticky）", pinning.n === 7 && pinning.allSticky, JSON.stringify(pinning));
+check("層を JS でずらしてはいない", pinning.noTransform, JSON.stringify(pinning));
 // スクロールの位置には手を出さない（吸い付かせるとブラウザ側の動きと引っぱり合って震える）
 check("動かした量がそのまま残る（吸い付かない）",
   drifts.map((d) => d.sl).join(",") === "904,913,916,923,1043,983",
