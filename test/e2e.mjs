@@ -372,6 +372,33 @@ await page.waitForTimeout(150);
 check("無いシートは行番号つきで報告される",
   /1行目.*見つかりません/.test(await page.textContent("#log")), (await page.textContent("#log")).slice(0, 60));
 
+// ---- 9b. 読み込んだExcelがブラウザに保存されないことの実測 ---------------
+const storage = await page.evaluate(async () => {
+  const ls = {};
+  for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); ls[k] = localStorage.getItem(k); }
+  const ss = {};
+  for (let i = 0; i < sessionStorage.length; i++) { const k = sessionStorage.key(i); ss[k] = sessionStorage.getItem(k); }
+  let dbs = [];
+  try { dbs = (await indexedDB.databases()).map((d) => d.name); } catch (e) { dbs = []; }
+  return { ls, ss, cookie: document.cookie, dbs };
+});
+check("localStorage に置くのは手順書だけ",
+  Object.keys(storage.ls).every((k) => k === "excel-extract-recipes-v1"),
+  Object.keys(storage.ls).join(","));
+check("sessionStorage / Cookie / IndexedDB は未使用",
+  Object.keys(storage.ss).length === 0 && storage.cookie === "" && storage.dbs.length === 0,
+  `ss=${Object.keys(storage.ss).length} cookie="${storage.cookie}" idb=${storage.dbs.join(",")}`);
+// セルの中身（サンプルの実データ）が保存領域に残っていないこと
+const leaked = ["名古屋", "デスク", "32000", "111600"].filter((w) => JSON.stringify(storage).includes(w));
+check("セルの値は保存領域に残らない", leaked.length === 0, leaked.join(","));
+// 再読み込みで読み込み済みブックが消えること
+await page.reload();
+await page.waitForFunction(() => !!window.__app);
+check("再読み込みで読み込んだブックは消える",
+  await page.evaluate(() => window.__app.S.wb === null && window.__app.S.sheets.length === 0));
+check("手順書は再読み込み後も残る",
+  (await page.evaluate(() => localStorage.getItem("excel-extract-recipes-v1"))) !== null);
+
 // ---- 10. 外部に一切送信していないことの実測 -----------------------------
 const external = requests.filter((r) => !r.url.startsWith(baseUrl) && !r.url.startsWith("data:") && !r.url.startsWith("blob:"));
 check("ページ取得以外の外部通信が 0 件", external.length === 0,
