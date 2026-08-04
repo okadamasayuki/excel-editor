@@ -201,7 +201,6 @@ body.stacked .splitter::after {
   background: linear-gradient(to bottom, transparent 2px, var(--muted) 2px 3px, transparent 3px,
                               transparent 4px, var(--muted) 4px 5px, transparent 5px);
 }
-body.srcmax .splitter { display: none; }
 @media (prefers-reduced-motion: reduce) { .splitter::after { transition: none; } }
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); position: relative; }
 .pane + .pane { border-left: 1px solid var(--line); }
@@ -391,6 +390,31 @@ body.srcmax .splitter { display: none; }
 .selbox[draggable="true"] { pointer-events: auto; cursor: grab; }
 .selbox[draggable="true"]:active { cursor: grabbing; }
 
+/* 出力へ持っていった範囲の跡。色は出力側のブロックと同じで、対応が分かる */
+.usedbox {
+  position: absolute; border: 1.5px dashed var(--bc, var(--dst));
+  background: color-mix(in srgb, var(--bc, var(--dst)) 14%, transparent);
+  border-radius: 1px;
+}
+.usedbox.sel, .usedbox.hot {
+  border-style: solid;
+  background: color-mix(in srgb, var(--bc, var(--dst)) 26%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bc, var(--dst)) 40%, transparent);
+}
+/* 行き先は普段は出さない。選んだときと、出力側のブロックに触れたときだけ */
+.usedbox .tag {
+  position: absolute; top: -11px; left: -1.5px;
+  display: flex; align-items: center; height: 18px; padding: 0 7px;
+  border-radius: 100px 100px 100px 2px; background: var(--bc, var(--dst));
+  color: #fff; font-size: 10.5px; font-weight: 700; font-family: var(--font-mono);
+  white-space: nowrap; max-width: 260px; overflow: hidden;
+  box-shadow: var(--shadow-sm); visibility: hidden;
+}
+.usedbox.sel .tag, .usedbox.hot .tag { visibility: visible; }
+:root[data-theme="dark"] .usedbox .tag { color: #14180F; }
+@media (prefers-color-scheme: dark) { .usedbox .tag { color: #14180F; } }
+:root[data-theme="light"] .usedbox .tag { color: #fff; }
+
 /* 出力ブロックのオーバーレイ */
 .blockbox {
   position: absolute; border: 1.5px solid var(--bc, var(--dst));
@@ -425,7 +449,7 @@ body.srcmax .splitter { display: none; }
 .blockbox.overlap { border-style: dashed; border-color: var(--bad); }
 /* 上に余裕がないとき（1行目や、スクロールで上端に来たとき）はラベルを下側に出す。
    そのままだと列見出しの下に潜って半分以上読めなくなる */
-.blockbox .tag.below, .dropghost .lbl.below {
+.blockbox .tag.below, .usedbox .tag.below, .dropghost .lbl.below {
   top: auto; bottom: -11px; border-radius: 2px 100px 100px 100px;
 }
 /* 置いた直後に少しだけ光らせて、どこに入ったか分かるようにする */
@@ -451,7 +475,6 @@ body.srcmax .splitter { display: none; }
 @media (prefers-color-scheme: dark) { .dropghost .lbl { color: #14180F; } }
 :root[data-theme="light"] .dropghost .lbl { color: #fff; }
 
-.gridwrap.armed { cursor: crosshair; }
 .gridwrap.dragover { box-shadow: 0 0 0 2px var(--dst) inset; }
 
 /* ============================================================
@@ -481,14 +504,8 @@ body.srcmax .splitter { display: none; }
 body.filedrag .dropzone, body.filedrag .gridwrap { box-shadow: 0 0 0 2px var(--src) inset; }
 
 /* ============================================================
-   元データの全画面表示 / 見出しのメニュー
+   見出しのメニュー
    ============================================================ */
-body.srcmax .panes, body.dstmax .panes { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
-body.srcmax .pane:not(.pane-src) { display: none; }
-body.dstmax .pane:not(.pane-dst) { display: none; }
-body.srcmax .pane-src, body.dstmax .pane-dst { border-left: none; grid-column: 1; grid-row: 1; }
-body.dstmax .splitter { display: none; }
-
 /* ブック構成そのものを畳む（元データと出力シートを広く使うため） */
 .railtoggle { padding: 2px 6px; font-size: 13px; line-height: 1; color: var(--muted); }
 .railtoggle:hover { color: var(--ink); background: var(--sunken); }
@@ -507,6 +524,19 @@ body.stacked .pane-rail { grid-column: 1; grid-row: 1 / span 3; }
 body.stacked .pane-src { grid-column: 2; grid-row: 1; }
 body.stacked .splitter { grid-column: 2; grid-row: 2; }
 body.stacked .pane-dst { grid-column: 2; grid-row: 3; border-left: 1px solid var(--line); border-top: 1px solid var(--line); }
+
+/* 全画面表示。並べ方（上下・ブック構成たたみ）の指定より後に、クラスを重ねた
+   強さで置く。先に書くと後続の指定に負け、1 枚になった画面が 34px の列や
+   元の高さのままの行に押し込まれてしまう */
+body.srcmax.srcmax .panes, body.dstmax.dstmax .panes {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+body.srcmax .pane:not(.pane-src), body.dstmax .pane:not(.pane-dst) { display: none; }
+body.srcmax.srcmax .pane-src, body.dstmax.dstmax .pane-dst {
+  border-left: none; border-top: none; grid-column: 1; grid-row: 1;
+}
+body.srcmax .splitter, body.dstmax .splitter { display: none; }
 
 .hmenu {
   position: fixed; z-index: 70; min-width: 168px;
@@ -718,8 +748,6 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <button class="btn sm" id="btnFreeze" title="選んだセルの上と左でウィンドウ枠を固定します">ここで固定</button>
         <label class="chk" id="hiddenNote" hidden><input type="checkbox" id="optShowHidden"> <span id="hiddenLabel">非表示も表示</span></label>
         <div class="spacer"></div>
-        <button class="btn sm" id="btnSelAll" disabled>全体を選択</button>
-        <button class="btn sm primary" id="btnPlace" disabled>出力へ配置</button>
       </div>
       <div class="gridwrap src" id="srcGrid" tabindex="0" hidden></div>
       <div class="dropzone" id="dropzone">
@@ -765,7 +793,6 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
       <div class="pane-head">
         <span class="eyebrow" style="color:var(--dst)">出力シート</span>
         <div class="spacer"></div>
-        <span class="hint" id="dstHint" hidden></span>
         <button class="btn sm" id="btnMaxDst" title="出力シートを画面いっぱいに表示します（Escで戻る）">⤢ 全画面</button>
       </div>
       <div class="toolbar">
@@ -937,7 +964,6 @@ var S = {
   out: [],              // [{id,name,blocks:[]}]
   activeOut: 0,
   selBlock: null,       // 選択中ブロックid
-  armed: null,          // 「出力へ配置」待ちのペイロード
   seq: 1, outSeq: 1,
   undo: [],
   noSnap: false,   // 手順書の実行中は 1 回分にまとめる
@@ -971,7 +997,7 @@ function undo() {
   var st = JSON.parse(S.undo.pop());
   S.out = st.out; S.activeOut = st.activeOut; S.seq = st.seq; S.outSeq = st.outSeq;
   S.selBlock = null;
-  renderOut(); renderBlockList(); renderSrcOverlay();
+  renderOut(); renderBlockList();
   toast("元に戻しました");
 }
 
@@ -1340,7 +1366,6 @@ function readWorkbook(data, name) {
   $("fileName").textContent = name;
   $("fileMeta").textContent = S.sheets.length + "シート";
   $("btnGen").disabled = false;
-  $("btnSelAll").disabled = false;
 
   // 新しいブックは必ず左上から見せる（前のファイルのスクロール位置を引きずらない）
   $("srcGrid").scrollTop = 0; $("srcGrid").scrollLeft = 0;
@@ -1510,7 +1535,10 @@ var srcGrid = makeGrid($("srcGrid"), {
     }
     return { text: t, cls: cls, style: style };
   },
-  afterDraw: function () { srcGrid.markHeaders(S.sel); }
+  afterDraw: function () {
+    srcGrid.markHeaders(S.sel);
+    placeChips($("srcGrid"), ".usedbox", ".tag");
+  }
 });
 
 /** 元データの列幅・行の高さ。非表示は 0（「非表示も表示」なら通常どおり出す） */
@@ -1577,11 +1605,31 @@ function renderSrcOverlay() {
     }
     ovl.appendChild(box);
   });
+
+  // 出力シートへ持っていった範囲は、出したあともここに残しておく。
+  // 枠の色は出力側のブロックと同じなので、別のシートを見て戻ってきても
+  // 「どこがどこへ行ったか」が色で分かる
+  allBlocks().forEach(function (f) {
+    var b = f.b;
+    if (b.sheet !== S.active) return;
+    var ub = srcGrid.box(b);
+    var u = el("div", "usedbox" + (S.selBlock === b.id ? " sel" : ""));
+    u.dataset.id = b.id;
+    u.style.cssText = "left:" + ub.left + "px;top:" + ub.top + "px;width:" + ub.width
+      + "px;height:" + ub.height + "px;--bc:" + blockColor(b) + ";";
+    var lbl = el("div", "tag", "→ " + f.o.name + "!" + a1(b.dr, b.dc));
+    u.appendChild(lbl);
+    ovl.appendChild(u);
+  });
+  placeChips($("srcGrid"), ".usedbox", ".tag");
   srcGrid.markHeaders(S.sel);
-  updateSelUI();
 }
 
-function updateSelUI() { $("btnPlace").disabled = !S.sel; }
+/** 出力側のブロックに触れたとき、元データ側の同じ色の枠を目立たせる */
+function hotBlock(id) {
+  var ns = srcGrid.overlay.querySelectorAll(".usedbox");
+  for (var i = 0; i < ns.length; i++) ns[i].classList.toggle("hot", ns[i].dataset.id === id);
+}
 
 function setSelection(r1, c1, r2, c2, sheet) {
   var g = normRange(r1, c1, r2, c2);
@@ -1882,6 +1930,8 @@ function renderOut() {
     (cont.maxR >= 0 ? " ／ " + (cont.maxR + 1) + "行 × " + (cont.maxC + 1) + "列" : "");
   $("btnGen").disabled = !S.wb;
   renderInspector();
+  // 元データ側の「持っていった範囲」の枠もブロックから作るので、ここで一緒に描き直す
+  renderSrcOverlay();
 }
 
 function renderOutTabs() {
@@ -1957,6 +2007,8 @@ function renderOutOverlay(cont) {
     n.title = S.sheets[b.sheet].name + "!" + rangeLabel(b) + " → " + a1(b.dr, b.dc) + "（ドラッグで動かせます）";
     n.addEventListener("dragstart", startMove);
     n.addEventListener("dragend", endMove);
+    n.addEventListener("pointerenter", function () { hotBlock(b.id); });
+    n.addEventListener("pointerleave", function () { hotBlock(null); });
 
     var tag = el("div", "tag");
     tag.draggable = true;
@@ -2199,9 +2251,9 @@ function clearGhost() {
   var wrap = $("dstGrid");
   // 出力側も、端へ運べば送られる（画面外のセルにも落とせる）
   dstScroller = makeEdgeScroller(wrap, function (pt) {
-    if (!dragPayload && !S.armed) return;
+    if (!dragPayload) return;
     var hit = dstGrid.cellAt(pt.x, pt.y, true);
-    if (hit) showGhost(Math.max(hit.rawR, 0), Math.max(hit.rawC, 0), dragPayload || S.armed);
+    if (hit) showGhost(Math.max(hit.rawR, 0), Math.max(hit.rawC, 0), dragPayload);
   });
   wrap.addEventListener("dragover", function (e) {
     if (!dragPayload) return;
@@ -2233,7 +2285,7 @@ function clearGhost() {
     if (h) setDstSel(dsAnchor.r, dsAnchor.c, h.r, h.c);
   });
   wrap.addEventListener("pointerdown", function (e) {
-    if (e.button !== 0 || S.armed) return;
+    if (e.button !== 0) return;
     if (e.target.closest(".tag")) return;
     var overBlock = !!e.target.closest(".blockbox");
     if (overBlock && !e.shiftKey) return;                       // ブロックは掴んで移動
@@ -2263,37 +2315,17 @@ function clearGhost() {
     try { wrap.releasePointerCapture(e.pointerId); } catch (err) {}
   });
 
-  // 「出力へ配置」で武装したあとのクリック配置
+  // ブロックの上を押したら、そのブロックを選んで集計の対象にする
   wrap.addEventListener("click", function (e) {
-    if (!S.armed) {
-      var hit0 = dstGrid.cellAt(e.clientX, e.clientY, false);
-      if (hit0) {
-        var h = outCache.map[hit0.r + "," + hit0.c];
-        var o = activeOut();
-        if (h && o && o.blocks[h.bi]) {
-          var bb = o.blocks[h.bi];
-          selectBlock(bb.id);
-          // 選んだブロックの範囲を集計の対象にする
-          var bs = rangeSize(bb);
-          var bh = bb.trans ? bs.w : bs.h, bw = bb.trans ? bs.h : bs.w;
-          setDstSel(bb.dr, bb.dc, bb.dr + bh - 1, bb.dc + bw - 1);
-        }
-      }
-      return;
-    }
-    var hit = dstGrid.cellAt(e.clientX, e.clientY, true);
+    var hit = dstGrid.cellAt(e.clientX, e.clientY, false);
     if (!hit) return;
-    dropPayload(S.armed, Math.max(hit.rawR, 0), Math.max(hit.rawC, 0));
-    S.armed = null;
-    wrap.classList.remove("armed");
-    $("dstHint").hidden = true; $("dstHint").textContent = "";
-    clearGhost();
-  });
-  wrap.addEventListener("pointermove", function (e) {
-    if (!S.armed) { if (dstScroller) dstScroller.stop(); return; }
-    dstScroller.move(e.clientX, e.clientY);
-    var hit = dstGrid.cellAt(e.clientX, e.clientY, true);
-    if (hit) showGhost(Math.max(hit.rawR, 0), Math.max(hit.rawC, 0), S.armed);
+    var h = outCache.map[hit.r + "," + hit.c], o = activeOut();
+    if (!h || !o || !o.blocks[h.bi]) return;
+    var bb = o.blocks[h.bi];
+    selectBlock(bb.id);
+    var bs = rangeSize(bb);
+    var bh = bb.trans ? bs.w : bs.h, bw = bb.trans ? bs.h : bs.w;
+    setDstSel(bb.dr, bb.dc, bb.dr + bh - 1, bb.dc + bw - 1);
   });
 })();
 
@@ -2890,7 +2922,6 @@ $("btnSample").addEventListener("click", loadSample);
 $("btnSample2").addEventListener("click", loadSample);
 $("btnSampleDl").addEventListener("click", downloadSample);
 $("btnGen").addEventListener("click", generate);
-$("btnSelAll").addEventListener("click", selectAll);
 /* --- 画面の好み（折りたたみ・並べ方）はこのブラウザに覚えておく --- */
 var PKEY = "excel-extract-prefs-v1";
 function loadPrefs() {
@@ -3093,23 +3124,9 @@ function gotoAppend(dir) {
   $("btnAppend" + d).addEventListener("click", function () { gotoAppend(dir); });
 });
 
-$("btnPlace").addEventListener("click", function () {
-  if (!S.sel) return;
-  S.armed = { kind: "range", sheet: S.sel.sheet, r1: S.sel.r1, c1: S.sel.c1, r2: S.sel.r2, c2: S.sel.c2 };
-  $("dstGrid").classList.add("armed");
-  $("dstHint").textContent = "置きたいセルをクリック（Escで取消）"; $("dstHint").hidden = false;
-  toast("出力シートで置きたいセルをクリックしてください");
-});
 document.addEventListener("keydown", function (e) {
   var maxed = document.body.classList.contains("srcmax") || document.body.classList.contains("dstmax");
-  if (e.key === "Escape" && maxed && !S.armed && !/input|textarea/i.test(e.target.tagName)) {
-    setMaxPane("src", false);
-  }
-  if (e.key === "Escape" && S.armed) {
-    S.armed = null; clearGhost();
-    $("dstGrid").classList.remove("armed");
-    $("dstHint").hidden = true; $("dstHint").textContent = "";
-  }
+  if (e.key === "Escape" && maxed && !/input|textarea/i.test(e.target.tagName)) setMaxPane("src", false);
   // 文字を打っている最中だけ、その欄の取り消しに譲る
   // （チェックボックスなどにフォーカスがあるときは、こちらの取り消しを効かせる）
   var t = e.target || {};

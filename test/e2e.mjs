@@ -197,15 +197,51 @@ await page.keyboard.press("Escape");
 await page.evaluate(() => { const w = document.getElementById("srcGrid"); w.scrollTop = 0; w.scrollLeft = 0; });
 await page.waitForTimeout(80);
 
-// ---- 4. 範囲を指定しての選択 + 「出力へ配置」クリック --------------------
+// ---- 4. 範囲を指定しての選択 + ドラッグでの配置 --------------------------
 await selectRange("A1", "C3");
 selText = await selInfo();
 check("A1:C3 を選択できる", /A1:C3/.test(selText), selText);
-await page.click("#btnPlace");
-const dstCell2 = await page.locator('#dstGrid .gc[data-r="12"][data-c="0"]').boundingBox();
-await page.mouse.click(dstCell2.x + 10, dstCell2.y + 10);
+check("「全体を選択」ボタンは無い", (await page.locator("#btnSelAll").count()) === 0);
+check("「出力へ配置」ボタンも無い", (await page.locator("#btnPlace").count()) === 0);
+await dragSelectionToRef("A13");
 blocks = await page.$$eval("#blockList .block-card .src", (ns) => ns.map((n) => n.textContent));
-check("クリック配置でブロックが2件になる", blocks.length === 2, blocks.join(" / "));
+check("ドラッグでの配置でブロックが2件になる", blocks.length === 2, blocks.join(" / "));
+dest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
+check("2件目の配置先は A13", dest[1] === "抜粋1!A13", dest.join(","));
+
+// ---- 4b. 出力へ持っていった範囲は元データ側に残る ------------------------
+// 別のシートを見て戻ってきても消えないこと、色が出力側のブロックと同じことを確かめる
+const usedFrames = async () => await page.evaluate(() =>
+  [...document.querySelectorAll("#srcGrid .usedbox")].map((n) => ({
+    id: n.dataset.id, bc: n.style.getPropertyValue("--bc"),
+    lbl: n.querySelector(".tag").textContent })));
+const outColors = async () => await page.evaluate(() =>
+  [...document.querySelectorAll("#dstGrid .blockbox")].map((n) => ({
+    id: n.dataset.id, bc: n.style.getPropertyValue("--bc") })));
+const used1 = await usedFrames(), outs1 = await outColors();
+check("持っていった範囲の枠が元データに残る", used1.length === 2, JSON.stringify(used1));
+check("枠の色は出力側のブロックと同じ",
+  used1.every((u) => (outs1.find((o) => o.id === u.id) || {}).bc === u.bc),
+  JSON.stringify({ used: used1, out: outs1 }));
+check("行き先がラベルに入っている",
+  used1.some((u) => /→ 抜粋1!A13/.test(u.lbl)), JSON.stringify(used1.map((u) => u.lbl)));
+// 別のシートへ行くと、そのシートのぶんだけになる
+await page.click('#srcTabs .tab:nth-child(2)');
+await page.waitForTimeout(200);
+check("別のシートには別のシートぶんだけ出る", (await usedFrames()).length === 0,
+  JSON.stringify(await usedFrames()));
+// 戻ってくると、また出る（前は消えたままだった）
+await page.click('#srcTabs .tab:nth-child(1)');
+await page.waitForTimeout(200);
+const used2 = await usedFrames();
+check("戻ってくると枠も戻る", used2.length === 2, JSON.stringify(used2));
+check("戻っても色は変わらない",
+  JSON.stringify(used2.map((u) => u.bc)) === JSON.stringify(used1.map((u) => u.bc)),
+  JSON.stringify(used2.map((u) => u.bc)));
+await page.screenshot({
+  path: join(root, "test/shots/pairs.png"),
+  clip: { x: 232, y: 48, width: 1208, height: 480 },
+});
 
 // ---- 5. 文章コマンド ----------------------------------------------------
 await page.evaluate(() => window.__app.runScript("支店別サマリの2行目から7行目を抜粋1のF3に置く", false));
@@ -1163,6 +1199,39 @@ check("ボタンが戻す表示になる", (await page.textContent("#btnMaxDst")
 await page.keyboard.press("Escape");
 await page.waitForTimeout(250);
 check("Escで戻る", await page.isVisible("#srcGrid"));
+
+// 全画面は、どの並べ方から入っても画面いっぱいになること。
+// 並べ方の指定に負けていたころは、ブック構成を畳んだ状態から全画面にすると
+// 34px の列に、上下に並べた状態からだと元の高さのままの行に押し込まれていた
+const maxedSize = async (which) => {
+  await page.click(which === "src" ? "#btnMaxSrc" : "#btnMaxDst");
+  await page.waitForTimeout(300);
+  const r = await page.evaluate((w) => {
+    const n = document.querySelector(w === "src" ? ".pane-src" : ".pane-dst");
+    const b = n.getBoundingClientRect();
+    const g = document.getElementById(w === "src" ? "srcGrid" : "dstGrid").getBoundingClientRect();
+    return { pw: Math.round(b.width), ph: Math.round(b.height), gw: Math.round(g.width) };
+  }, which);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(200);
+  return r;
+};
+for (const [name, rail, stacked] of [
+  ["そのまま", false, false], ["ブック構成をたたむ", true, false],
+  ["上下に並べる", false, true], ["両方", true, true],
+]) {
+  await page.evaluate(([r, k]) => {
+    document.body.classList.toggle("railoff", r);
+    document.body.classList.toggle("stacked", k);
+  }, [rail, stacked]);
+  await page.waitForTimeout(150);
+  const a = await maxedSize("src"), b = await maxedSize("dst");
+  check(`${name}から全画面にしても画面いっぱいになる`,
+    a.pw === 1440 && a.ph > 800 && a.gw > 1400 && b.pw === 1440 && b.ph > 800,
+    JSON.stringify({ src: a, dst: b }));
+}
+await page.evaluate(() => { document.body.classList.remove("railoff", "stacked"); });
+await page.waitForTimeout(200);
 
 // 左右／上下の並べ替え
 const sideBySide = await page.evaluate(() => {
