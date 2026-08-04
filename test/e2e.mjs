@@ -911,80 +911,46 @@ check("末尾は右へ伸び続ける",
   wide.map((x) => x.label).join(","));
 check("120列を超えても左上へ戻らない（再掲）", wide[4].scrollLeft > 10000, String(wide[4].scrollLeft));
 
-// ---- 9f-3. 固定したら区切り目でスクロールが止まる ------------------------
-// 半端な位置で止まると、固定した列の隣が途中で切れた細い列になり、
-// 見出しは「M」なのに中身は前の列の右端だけ、という食い違いが起きていた
+// ---- 9f-3. 固定した見出しはスクロールしても中身から離れない --------------
+// 貼り付ける処理を描き直しの中に置いていたころは、同じ範囲を描いたままの細かい
+// スクロールで見出しだけが取り残され、固定した列の中身と列名が横にずれていった
 await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
-const splitState = async () => await page.evaluate(() => {
-  const w = document.getElementById("srcGrid");
-  const wr = w.getBoundingClientRect();
-  const band = document.querySelector("#srcGrid .gfrz-left").getBoundingClientRect();
-  // 区切りのすぐ右にある列の見出しとセル
-  const at = (sel) => [...document.querySelectorAll(sel)]
-    .map((n) => ({ k: n.dataset.c, x: n.getBoundingClientRect().x, w: n.getBoundingClientRect().width }))
-    .filter((o) => o.x >= band.right - 1.5 && o.x < wr.right)
-    .sort((a, b) => a.x - b.x)[0];
-  const h = at("#srcGrid .gcolh .gh"), c = at('#srcGrid .gcells .gc[data-r="0"]');
-  return {
-    scrollLeft: Math.round(w.scrollLeft), split: Math.round(band.right),
-    head: h && { k: h.k, x: Math.round(h.x) }, cell: c && { k: c.k, x: Math.round(c.x) },
-  };
-});
 await page.evaluate(() => window.__app.openHeaderMenu("c", 3, 300, 200));
 await page.click('.hmenu button:has-text("この列の左で固定")');
 await page.evaluate(() => { document.getElementById("srcGrid").scrollLeft = 900; });
-await page.waitForTimeout(320);
-const snapped = await splitState();
-check("固定した列の隣は区切りぴったりから始まる",
-  snapped.head && Math.abs(snapped.head.x - snapped.split) <= 1.5, JSON.stringify(snapped));
-check("見出しと中身が同じ列で始まる",
-  snapped.head && snapped.cell && snapped.head.k === snapped.cell.k
-    && Math.abs(snapped.head.x - snapped.cell.x) <= 1, JSON.stringify(snapped));
-// 少しずつ動かしても必ず 1 列ぶん進む（区切りに吸い付いて止まらない）
-const steps = [];
-for (let i = 0; i < 3; i++) {
-  await page.evaluate(() => { document.getElementById("srcGrid").scrollLeft += 8; });
-  await page.waitForTimeout(320);
-  steps.push((await splitState()).scrollLeft);
-}
-check("少しずつ動かしても止まらない",
-  steps[0] > snapped.scrollLeft && steps[1] > steps[0] && steps[2] > steps[1],
-  `${snapped.scrollLeft} → ${steps.join(" → ")}`);
-check("進んだ先も区切りに乗っている", await page.evaluate(() => {
-  const A = window.__app, g = A.srcGrid;
-  const fzW = g.colX[g.freeze.c] || 0, sl = document.getElementById("srcGrid").scrollLeft;
-  return g.colX.some((x) => Math.abs(x - fzW - sl) < 0.6);
-}));
-// 左へ戻すときも同じ
-await page.evaluate(() => { document.getElementById("srcGrid").scrollLeft -= 8; });
-await page.waitForTimeout(320);
-const back = await splitState();
-check("左へ戻すときも区切りで止まる",
-  back.scrollLeft < steps[2] && back.head && Math.abs(back.head.x - back.split) <= 1.5,
-  JSON.stringify(back));
-// 固定した列の「列名」は、その列の中身とぴったり重なったまま動かないこと。
-// 見出しだけを描き直しのときにしか動かしていなかったころは、同じ範囲を描いたままの
-// 細かいスクロールで見出しが取り残され、中身と横にずれて見えていた
-const headOverCells = async () => await page.evaluate(() => {
-  const q = (sel) => [...document.querySelectorAll(sel)].map((n) => ({
-    c: n.dataset.c, x: Math.round(n.getBoundingClientRect().x * 10) / 10 }))
+await page.waitForTimeout(200);
+
+/** 固定した列の「列名」と「中身」の左端のずれ、および貼り付き位置 */
+const frozenState = async () => await page.evaluate(() => {
+  const w = document.getElementById("srcGrid"), wr = w.getBoundingClientRect();
+  const q = (sel) => [...document.querySelectorAll(sel)]
+    .map((n) => ({ c: n.dataset.c, x: Math.round((n.getBoundingClientRect().x - wr.x) * 10) / 10 }))
     .filter((o) => o.c !== undefined);
-  const heads = q("#srcGrid .gfrzhead .gh");
-  const cells = q('#srcGrid .gfrz-left .gc[data-r="0"]');
-  return heads.map((h) => {
-    const cell = cells.find((c) => c.c === h.c);
-    return { c: h.c, gap: cell ? Math.round((h.x - cell.x) * 10) / 10 : null };
-  });
+  const heads = q("#srcGrid .gfrzhead .gh"), cells = q('#srcGrid .gfrz-left .gc[data-r="0"]');
+  return {
+    sl: Math.round(w.scrollLeft),
+    band: Math.round((document.querySelector("#srcGrid .gfrz-left").getBoundingClientRect().x - wr.x) * 10) / 10,
+    gaps: heads.map((h) => {
+      const cell = cells.find((c) => c.c === h.c);
+      return cell ? Math.round((h.x - cell.x) * 10) / 10 : null;
+    }),
+  };
 });
 const drifts = [];
-for (const px of [4, 9, 3, 7]) {
+for (const px of [4, 9, 3, 7, 120, -60]) {
   await page.evaluate((d) => { document.getElementById("srcGrid").scrollLeft += d; }, px);
-  await page.waitForTimeout(320);
-  drifts.push(await headOverCells());
+  await page.waitForTimeout(120);
+  drifts.push(await frozenState());
 }
 check("固定した列名は中身の真上から動かない",
-  drifts.every((d) => d.length > 0 && d.every((o) => o.gap === 0)),
-  JSON.stringify(drifts));
+  drifts.every((d) => d.gaps.length > 0 && d.gaps.every((g) => g === 0)),
+  JSON.stringify(drifts.map((d) => d.gaps)));
+check("固定した列そのものも左端に貼り付いたまま",
+  drifts.every((d) => d.band === 0), JSON.stringify(drifts.map((d) => d.band)));
+// スクロールの位置には手を出さない（吸い付かせるとブラウザ側の動きと引っぱり合って震える）
+check("動かした量がそのまま残る（吸い付かない）",
+  drifts.map((d) => d.sl).join(",") === "904,913,916,923,1043,983",
+  drifts.map((d) => d.sl).join(","));
 await page.screenshot({
   path: join(root, "test/shots/freeze-scrolled.png"),
   clip: { x: 233, y: 90, width: 1000, height: 420 },
@@ -998,24 +964,28 @@ await page.evaluate(() => {
 });
 await page.evaluate(() => window.__app.openHeaderMenu("r", 2, 300, 200));
 await page.click('.hmenu button:has-text("この行の上で固定")');
-await page.evaluate(() => { document.getElementById("srcGrid").scrollTop = 137; });
-await page.waitForTimeout(320);
-check("行を固定したときは縦も区切りで止まる", await page.evaluate(() => {
-  const g = window.__app.srcGrid;
-  const fzH = g.rowY[g.freeze.r] || 0, st = document.getElementById("srcGrid").scrollTop;
-  return g.rowY.some((y) => Math.abs(y - fzH - st) < 0.6);
-}), String(Math.round(await page.evaluate(() => document.getElementById("srcGrid").scrollTop))));
-// 固定していないシートは、どこでも自由に止まれる
-await page.evaluate(() => {
-  const w = document.getElementById("srcGrid");
-  window.__app.S.sheets[window.__app.S.active].freeze = null;
-  window.__app.renderSrcAll ? window.__app.renderSrcAll() : null;
-  w.scrollTop = 0; w.scrollLeft = 137;
-});
-await page.waitForTimeout(320);
-check("固定していなければ吸い付かない",
-  Math.round(await page.evaluate(() => document.getElementById("srcGrid").scrollLeft)) === 137,
-  String(Math.round(await page.evaluate(() => document.getElementById("srcGrid").scrollLeft))));
+const rowDrifts = [];
+for (const px of [137, 5, 11, 40]) {
+  await page.evaluate((d) => { document.getElementById("srcGrid").scrollTop += d; }, px);
+  await page.waitForTimeout(120);
+  rowDrifts.push(await page.evaluate(() => {
+    const w = document.getElementById("srcGrid"), wr = w.getBoundingClientRect();
+    const q = (sel) => [...document.querySelectorAll(sel)]
+      .map((n) => ({ r: n.dataset.r, y: Math.round((n.getBoundingClientRect().y - wr.y) * 10) / 10 }))
+      .filter((o) => o.r !== undefined);
+    const heads = q("#srcGrid .gfrzhead .gh"), cells = q('#srcGrid .gfrz-top .gc[data-c="0"]');
+    return { st: Math.round(w.scrollTop), gaps: heads.map((h) => {
+      const cell = cells.find((c) => c.r === h.r);
+      return cell ? Math.round((h.y - cell.y) * 10) / 10 : null;
+    }) };
+  }));
+}
+check("固定した行番号も中身の真横から動かない",
+  rowDrifts.every((d) => d.gaps.length > 0 && d.gaps.every((g) => g === 0)),
+  JSON.stringify(rowDrifts.map((d) => d.gaps)));
+check("縦も動かした量がそのまま残る",
+  rowDrifts.map((d) => d.st).join(",") === "137,142,153,193",
+  rowDrifts.map((d) => d.st).join(","));
 
 await page.evaluate(() => {
   const w = document.getElementById("srcGrid");

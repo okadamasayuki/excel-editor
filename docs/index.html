@@ -1097,11 +1097,6 @@ function makeGrid(wrap, opts) {
     wrap.scrollLeft = Math.min(wrap.scrollLeft, Math.max(0, HW + x - wrap.clientWidth));
     wrap.scrollTop = Math.min(wrap.scrollTop, Math.max(0, HH + y - wrap.clientHeight));
     G.win = null;
-    // 固定を付けた直後も区切りに合わせる（手前の区切りへ寄せて、隣の列を切らない）
-    if (G.freeze.r || G.freeze.c) {
-      snapPrevL = wrap.scrollLeft + 1; snapPrevT = wrap.scrollTop + 1;
-      G.snapFrozen();
-    }
   };
 
   /** 1 セルぶんの div を作る */
@@ -1139,6 +1134,23 @@ function makeGrid(wrap, opts) {
     return n;
   }
 
+  /**
+   * 見出しと固定した行・列を、スクロール量ぶん逆に動かして画面に貼り付ける。
+   * 描き直しとは切り離しておくこと。描き直しの中でだけ動かしていたころは、
+   * 同じ範囲を描いたままの細かいスクロールで見出しだけが取り残され、
+   * 固定した列の中身と列名が横にずれていった
+   */
+  function syncLayers() {
+    var st = wrap.scrollTop, sl = wrap.scrollLeft;
+    colh.style.transform = "translateY(" + st + "px)";
+    rowh.style.transform = "translateX(" + sl + "px)";
+    corner.style.transform = "translate(" + sl + "px," + st + "px)";
+    frzTop.style.transform = "translateY(" + st + "px)";
+    frzLeft.style.transform = "translateX(" + sl + "px)";
+    frzCorner.style.transform = "translate(" + sl + "px," + st + "px)";
+    frzHead.style.transform = "translate(" + sl + "px," + st + "px)";
+  }
+
   G.draw = function () {
     var st = wrap.scrollTop, sl = wrap.scrollLeft;
     var vh = wrap.clientHeight, vw = wrap.clientWidth;
@@ -1150,16 +1162,7 @@ function makeGrid(wrap, opts) {
     var r1 = clamp(findIdx(G.rowY, st + vh - HH, G.rows) + 2, 0, G.rows - 1);
     var c0 = clamp(findIdx(G.colX, sl - HW, G.cols) - 1, 0, G.cols - 1);
     var c1 = clamp(findIdx(G.colX, sl + vw - HW, G.cols) + 1, 0, G.cols - 1);
-    colh.style.transform = "translateY(" + st + "px)";
-    rowh.style.transform = "translateX(" + sl + "px)";
-    corner.style.transform = "translate(" + sl + "px," + st + "px)";
-    frzTop.style.transform = "translateY(" + st + "px)";
-    frzLeft.style.transform = "translateX(" + sl + "px)";
-    frzCorner.style.transform = "translate(" + sl + "px," + st + "px)";
-    // 固定ぶんの見出しも毎回ここで合わせる。下の描き直しの中でだけ動かしていたころは、
-    // 同じ範囲を描いたままの細かいスクロールで見出しだけ取り残され、
-    // 固定した列の中身と列名が横にずれて見えていた
-    frzHead.style.transform = "translate(" + sl + "px," + st + "px)";
+    syncLayers();
 
     var key = r0 + ":" + r1 + ":" + c0 + ":" + c1 + ":" + fz.r + ":" + fz.c;
     if (G.win === key) return;
@@ -1269,45 +1272,10 @@ function makeGrid(wrap, opts) {
     if (left - HW - fzW < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, left - HW - fzW - w);
     if (left + w > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = left + w - wrap.clientWidth + 8;
   };
-  /**
-   * 固定した行・列があるときは、スクロールを区切り目に合わせる。
-   * 半端な位置で止まると固定した列の隣が途中で切れ、見出しは「M」なのに中身は
-   * 前の列の右端だけ、という状態になって見出しと中身がずれて見える。
-   * Excel も枠を固定すると 1 列（1 行）ずつ動くので、それに揃える。
-   * 動かした向きに合わせて次／前の区切りへ送るので、少しずつ動かしても止まらない。
-   */
-  function snapAxis(cur, prev, arr, n, fzOff, max) {
-    if (cur <= 0.5 || cur >= max - 0.5) return cur;
-    var i = findIdx(arr, cur + fzOff, n);
-    var lo = arr[i] - fzOff;
-    if (Math.abs(cur - lo) < 0.5) return cur;              // すでに区切りに乗っている
-    if (cur <= prev) return lo;                            // 左（上）へ動かした → 手前の区切り
-    var hi = (i + 1 <= n ? arr[i + 1] : arr[i]) - fzOff;   // 右（下）へ動かした → 次の区切り
-    return Math.min(hi, max);
-  }
-  var snapPrevL = 0, snapPrevT = 0, snapTimer = 0;
-  G.snapFrozen = function () {
-    var fz = G.freeze;
-    if (!fz || (!fz.r && !fz.c)) { snapPrevL = wrap.scrollLeft; snapPrevT = wrap.scrollTop; return; }
-    if (fz.c) {
-      var maxL = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
-      var l = snapAxis(wrap.scrollLeft, snapPrevL, G.colX, G.cols, G.colX[fz.c] || 0, maxL);
-      if (Math.abs(l - wrap.scrollLeft) >= 0.5) wrap.scrollLeft = l;
-    }
-    if (fz.r) {
-      var maxT = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
-      var t = snapAxis(wrap.scrollTop, snapPrevT, G.rowY, G.rows, G.rowY[fz.r] || 0, maxT);
-      if (Math.abs(t - wrap.scrollTop) >= 0.5) wrap.scrollTop = t;
-    }
-    snapPrevL = wrap.scrollLeft; snapPrevT = wrap.scrollTop;
-    G.draw();
-  };
-  wrap.addEventListener("scroll", function () {
-    G.schedule();
-    // 動かしている最中に引き戻すと使いづらいので、手が止まってから合わせる
-    if (snapTimer) clearTimeout(snapTimer);
-    snapTimer = setTimeout(function () { snapTimer = 0; G.snapFrozen(); }, 110);
-  }, { passive: true });
+  // 貼り付いて見せている層は、スクロールの通知の中でその場で動かす。
+  // 描き直し（rAF）の中だけで動かすと 1 フレーム遅れて追いかける形になり、
+  // 素早く動かしたときに固定した行・列が細かく震えて見える
+  wrap.addEventListener("scroll", function () { syncLayers(); G.schedule(); }, { passive: true });
   // 並べ方の切り替えや全画面など、外側の都合で大きさが変わっても描き直す。
   // 呼び出し側の再描画に頼ると、レイアウトが確定する前に描いて中途半端になる
   if (window.ResizeObserver) new ResizeObserver(G.schedule).observe(wrap);
