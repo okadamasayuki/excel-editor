@@ -53,6 +53,15 @@ function check(name, cond, extra) {
   console.log(`${cond ? "  ok  " : " FAIL "} ${name}${extra ? ` (${extra})` : ""}`);
 }
 
+/** 範囲を選ぶ（画面の入力欄は廃止したので、アプリの API で指定する） */
+async function selectRange(from, to) {
+  await page.evaluate(([f, t]) => {
+    const A = window.__app, a = A.parseCell(f), b = A.parseCell(t);
+    A.setSelection(a.r, a.c, b.r, b.c);
+    A.revealSelection();
+  }, [from, to]);
+}
+
 // Chromium はロケールに合わせてダウンロード名を正規化するため、C ロケールのままだと
 // 日本語ファイル名が "download" に落ちる。実機と同じ UTF-8 で起動する。
 const browser = await chromium.launch({
@@ -138,12 +147,22 @@ await page.waitForTimeout(300);
 const restB = await page.evaluate(() => document.getElementById("srcGrid").scrollTop);
 check("離したら自動スクロールが止まる", restA === restB, `${Math.round(restA)} → ${Math.round(restB)}`);
 
-// ---- 4. 範囲入力での選択 + 「出力へ配置」クリック ------------------------
-await page.fill("#refFrom", "A1");
-await page.fill("#refTo", "C3");
-await page.click("#btnApplyRef");
+// 横スクロール中でも、貼り付いている行見出しは見出しとして扱われること
+// （描画は画面外にも少し余分に作るので、位置は座標で直接指定する）
+const gb = await page.locator("#srcGrid").boundingBox();
+await page.mouse.click(gb.x + 20, gb.y + 26 + 40);
+const selAfterHead = await page.evaluate(() => window.__app.S.sel);
+check("横スクロール中でも行見出しで行全体を選べる",
+  selAfterHead.c1 === 0 && selAfterHead.r1 === selAfterHead.r2,
+  JSON.stringify(selAfterHead));
+await page.keyboard.press("Escape");
+await page.evaluate(() => { const w = document.getElementById("srcGrid"); w.scrollTop = 0; w.scrollLeft = 0; });
+await page.waitForTimeout(80);
+
+// ---- 4. 範囲を指定しての選択 + 「出力へ配置」クリック --------------------
+await selectRange("A1", "C3");
 selText = await page.textContent("#selInfo");
-check("入力欄から A1:C3 を選択できる", /A1:C3/.test(selText), selText);
+check("A1:C3 を選択できる", /A1:C3/.test(selText), selText);
 await page.click("#btnPlace");
 const dstCell2 = await page.locator('#dstGrid .gc[data-r="12"][data-c="0"]').boundingBox();
 await page.mouse.click(dstCell2.x + 10, dstCell2.y + 10);
@@ -520,9 +539,7 @@ const wB = await page.$eval('#srcGrid .gc[data-r="1"][data-c="1"]', (n) => n.get
 check("列ごとに幅が変わる", Math.round(wA) === 84 && Math.round(wB) === 54, `A=${Math.round(wA)} B=${Math.round(wB)}`);
 
 // ウィンドウ枠の固定
-await page.fill("#refFrom", "B3");
-await page.fill("#refTo", "B3");
-await page.click("#btnApplyRef");
+await selectRange("B3", "B3");
 await page.click("#btnFreeze");
 check("固定するとボタンが解除に変わる", (await page.textContent("#btnFreeze")) === "固定を解除");
 check("固定した行・列の層が出る",
@@ -553,19 +570,75 @@ check("固定した行番号・列名も画面内に残る",
 await page.click("#btnFreeze");
 check("固定を解除できる", (await page.textContent("#btnFreeze")) === "ここで固定");
 
+// ---- 9d-2. 見出しを押すと固定メニューが出る ------------------------------
+await page.evaluate(() => { const s = window.__app.S.sheets[window.__app.S.active]; s.freeze = null; });
+await page.evaluate(() => { const w = document.getElementById("srcGrid"); w.scrollTop = 0; w.scrollLeft = 0; });
+await page.waitForTimeout(80);
+const rowHead3 = await page.locator('#srcGrid .growh .gh[data-r="2"]').boundingBox();
+await page.mouse.click(rowHead3.x + 20, rowHead3.y + 10);
+check("行見出しを押すとメニューが出る", await page.isVisible(".hmenu"));
+check("メニューに対象の行が出る", (await page.textContent(".hmenu .ttl")) === "3行目",
+  await page.textContent(".hmenu .ttl"));
+check("行を押したときは上で固定と出る",
+  /この行の上で固定/.test(await page.textContent(".hmenu")), await page.textContent(".hmenu"));
+await page.click('.hmenu button:has-text("この行の上で固定")');
+check("メニューから固定できる",
+  (await page.evaluate(() => window.__app.S.sheets[window.__app.S.active].freeze)).r === 2,
+  JSON.stringify(await page.evaluate(() => window.__app.S.sheets[window.__app.S.active].freeze)));
+check("固定するとメニューが閉じる", (await page.locator(".hmenu").count()) === 0);
+
+// 列見出しからも同じように固定できる
+const colHeadC = await page.locator('#srcGrid .gcolh .gh[data-c="1"]').boundingBox();
+await page.mouse.click(colHeadC.x + 20, colHeadC.y + 10);
+check("列見出しでは左で固定と出る",
+  /この列の左で固定/.test(await page.textContent(".hmenu")), await page.textContent(".hmenu"));
+check("固定中は解除も選べる", /固定を解除/.test(await page.textContent(".hmenu")));
+await page.click('.hmenu button:has-text("この列の左で固定")');
+const fz2 = await page.evaluate(() => window.__app.S.sheets[window.__app.S.active].freeze);
+check("行と列の固定は両立する", fz2.r === 2 && fz2.c === 1, JSON.stringify(fz2));
+
+// 固定した行・列は画面に貼り付いているので、スクロール後もその見出しを正しく掴めること
+await page.evaluate(() => { const w = document.getElementById("srcGrid"); w.scrollTop = 300; w.scrollLeft = 200; });
+await page.waitForTimeout(120);
+const frozenHead0 = await page.locator('#srcGrid .gfrzhead .gh[data-r="0"]').boundingBox();
+await page.mouse.click(frozenHead0.x + 20, frozenHead0.y + 10);
+check("スクロール後も固定行の見出しを正しく掴める",
+  (await page.textContent(".hmenu .ttl")) === "1行目", await page.textContent(".hmenu .ttl"));
+check("1行目では固定できないと伝える",
+  /1行目より上は固定できません/.test(await page.textContent(".hmenu")), await page.textContent(".hmenu"));
+await page.keyboard.press("Escape");
+check("Escでメニューが閉じる", (await page.locator(".hmenu").count()) === 0);
+// 固定セルそのものも正しく選べる
+const frozenCell = await page.locator('#srcGrid .gfrz-corner .gc[data-r="1"][data-c="0"]').boundingBox();
+await page.mouse.click(frozenCell.x + 10, frozenCell.y + 10);
+check("スクロール後も固定セルを正しく選べる",
+  /A2/.test(await page.textContent("#selInfo")), await page.textContent("#selInfo"));
+await page.evaluate(() => { const w = document.getElementById("srcGrid"); w.scrollTop = 0; w.scrollLeft = 0; });
+await page.evaluate(() => { window.__app.S.sheets[window.__app.S.active].freeze = null; window.__app.S.sel = null; });
+
+// ---- 9d-3. 元データの全画面表示 -----------------------------------------
+const beforeW = await page.evaluate(() => document.getElementById("srcGrid").clientWidth);
+await page.click("#btnMaxSrc");
+await page.waitForTimeout(200);
+const afterW = await page.evaluate(() => document.getElementById("srcGrid").clientWidth);
+check("全画面で元データが広がる", afterW > beforeW * 1.8, `${beforeW}px → ${afterW}px`);
+check("全画面では他のペインが隠れる",
+  !(await page.isVisible("#dstGrid")) && !(await page.isVisible("#sheetList")));
+check("ボタンが戻す表示になる", (await page.textContent("#btnMaxSrc")) === "⤡ 戻す");
+check("全画面でもセルは描かれる",
+  (await page.$$eval("#srcGrid .gc", (ns) => ns.filter((n) => n.textContent.trim()).length)) > 5);
+await page.keyboard.press("Escape");
+await page.waitForTimeout(200);
+check("Escで元の3画面に戻る",
+  (await page.isVisible("#dstGrid")) && (await page.textContent("#btnMaxSrc")) === "⤢ 全画面");
+
 // ---- 9e. 出力の末尾の下／右へ続けて置く ---------------------------------
 await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
-await page.fill("#refFrom", "A2");
-await page.fill("#refTo", "F2");
-await page.click("#btnApplyRef");
+await selectRange("A2", "F2");
 await page.click("#btnAppendDown");
-await page.fill("#refFrom", "A3");
-await page.fill("#refTo", "F3");
-await page.click("#btnApplyRef");
+await selectRange("A3", "F3");
 await page.click("#btnAppendRight");
-await page.fill("#refFrom", "A5");
-await page.fill("#refTo", "F5");
-await page.click("#btnApplyRef");
+await selectRange("A5", "F5");
 await page.click("#btnAppendDown");
 const appended = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
 check("末尾の下は次の行、末尾の右は横に並ぶ",
@@ -577,9 +650,7 @@ await page.evaluate(() => {
   A.runScript("シート追加 遠い\n書式つきのA2:F2を遠いのA60に置く", true);
   document.getElementById("dstGrid").scrollTop = 0;
 });
-await page.fill("#refFrom", "A5");
-await page.fill("#refTo", "F5");
-await page.click("#btnApplyRef");
+await selectRange("A5", "F5");
 await page.click("#btnAppendDown");
 await page.waitForTimeout(150);
 const reveal = await page.evaluate(() => {
@@ -594,9 +665,7 @@ check("置いた直後は光って知らせる",
   (await page.locator("#dstGrid .blockbox.flash").count()) === 1);
 
 // 押す前にどこへ置かれるか見える
-await page.fill("#refFrom", "A6");
-await page.fill("#refTo", "F6");
-await page.click("#btnApplyRef");
+await selectRange("A6", "F6");
 await page.hover("#btnAppendRight");
 check("押す前に置き場所が出力側に見える", (await page.locator("#dstGrid .dropghost").count()) === 1);
 // 「末尾の右」＝直前に置いたブロックの右隣（手順書の「右に続けて置く」と同じ基準）。

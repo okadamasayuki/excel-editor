@@ -444,6 +444,31 @@ button, input, select, textarea { font: inherit; color: inherit; }
 body.filedrag .dropzone, body.filedrag .gridwrap { box-shadow: 0 0 0 2px var(--src) inset; }
 
 /* ============================================================
+   元データの全画面表示 / 見出しのメニュー
+   ============================================================ */
+body.srcmax .panes { grid-template-columns: minmax(0, 1fr); }
+body.srcmax .pane:not(.pane-src) { display: none; }
+body.srcmax .console { display: none; }
+body.srcmax .pane-src { border-left: none; }
+
+.hmenu {
+  position: fixed; z-index: 70; min-width: 168px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg); padding: 4px; display: flex; flex-direction: column; gap: 1px;
+}
+.hmenu .ttl {
+  font-size: 10.5px; color: var(--muted); padding: 4px 9px 5px;
+  border-bottom: 1px solid var(--line-soft); margin-bottom: 3px; font-family: var(--font-mono);
+}
+.hmenu button {
+  border: none; background: transparent; text-align: left; cursor: pointer;
+  padding: 6px 9px; border-radius: var(--r-sm); font-size: 12px; color: var(--ink);
+  display: flex; align-items: center; gap: 7px; white-space: nowrap;
+}
+.hmenu button:hover { background: var(--src-soft); color: var(--src); }
+.hmenu button .k { color: var(--muted); font-size: 10.5px; margin-left: auto; font-family: var(--font-mono); }
+
+/* ============================================================
    読み込み中の表示
    ============================================================ */
 .loading {
@@ -631,21 +656,15 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
     </section>
 
     <!-- 元データ -->
-    <section class="pane" aria-label="元データ">
+    <section class="pane pane-src" aria-label="元データ">
       <div class="pane-head">
         <span class="eyebrow" style="color:var(--src)">元データ</span>
         <span class="hint ellip" id="srcSheetName"></span>
         <div class="spacer"></div>
         <span class="selinfo none" id="selInfo">未選択</span>
+        <button class="btn sm" id="btnMaxSrc" title="元データを画面いっぱいに表示します（Escで戻る）">⤢ 全画面</button>
       </div>
       <div class="toolbar">
-        <div class="field">
-          <label for="refFrom">範囲</label>
-          <input class="inp w-ref" id="refFrom" placeholder="A1" aria-label="開始セル">
-          <span class="hint">→</span>
-          <input class="inp w-ref" id="refTo" placeholder="D10" aria-label="終了セル">
-        </div>
-        <button class="btn sm src-accent" id="btnApplyRef">範囲を選択</button>
         <button class="btn sm" id="btnFreeze" title="選んだセルの上と左でウィンドウ枠を固定します">ここで固定</button>
         <label class="chk" id="hiddenNote" hidden><input type="checkbox" id="optShowHidden"> 非表示も表示</label>
         <div class="spacer"></div>
@@ -1085,8 +1104,12 @@ function makeGrid(wrap, opts) {
   /** 画面座標 → セル座標（見出しの外側は rawR/rawC が -1 になる） */
   G.cellAt = function (clientX, clientY, allowHeader) {
     var rect = wrap.getBoundingClientRect();
-    var x = clientX - rect.left + wrap.scrollLeft - HW;
-    var y = clientY - rect.top + wrap.scrollTop - HH;
+    var xv = clientX - rect.left, yv = clientY - rect.top;
+    // 見出しの帯と固定した行・列は画面に貼り付いているので、スクロール量を足さない。
+    // 足すと、横スクロール中の行見出しがセル扱いになってしまう
+    var fzW = G.colX[G.freeze.c] || 0, fzH = G.rowY[G.freeze.r] || 0;
+    var x = xv < HW ? -1 : xv - HW + ((fzW > 0 && xv < HW + fzW) ? 0 : wrap.scrollLeft);
+    var y = yv < HH ? -1 : yv - HH + ((fzH > 0 && yv < HH + fzH) ? 0 : wrap.scrollTop);
     if (!allowHeader && (x < 0 || y < 0)) return null;
     var c = x < 0 ? -1 : findIdx(G.colX, x, G.cols);
     var r = y < 0 ? -1 : findIdx(G.rowY, y, G.rows);
@@ -1212,6 +1235,8 @@ function readWorkbook(data, name) {
   $("btnGen").disabled = false;
   $("btnSelAll").disabled = false;
 
+  // 新しいブックは必ず左上から見せる（前のファイルのスクロール位置を引きずらない）
+  $("srcGrid").scrollTop = 0; $("srcGrid").scrollLeft = 0;
   renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList(); renderExamples();
   var totalRows = S.sheets.reduce(function (a, s) { return a + s.usedRows; }, 0);
   log("読み込み: " + name + " (" + S.sheets.length + "シート / 計" + totalRows + "行)", "ok");
@@ -1465,8 +1490,6 @@ function updateSelUI() {
     var sz = rangeSize(S.sel);
     info.classList.remove("none");
     info.textContent = S.sheets[S.sel.sheet].name + "!" + rangeLabel(S.sel) + "  " + sz.h + "×" + sz.w;
-    $("refFrom").value = a1(S.sel.r1, S.sel.c1);
-    $("refTo").value = a1(S.sel.r2, S.sel.c2);
     $("btnPlace").disabled = false;
     $("btnAppendDown").disabled = false;
     $("btnAppendRight").disabled = false;
@@ -1485,6 +1508,13 @@ function setSelection(r1, c1, r2, c2, sheet) {
   S.sel = g;
   renderSrcOverlay();
 }
+/** 選んだ範囲が画面の外なら、そこまで元データ側を動かす */
+function revealSelection() {
+  if (!S.sel) return;
+  srcGrid.scrollToCell(S.sel.r2, S.sel.c2);
+  srcGrid.scrollToCell(S.sel.r1, S.sel.c1);
+  srcGrid.draw();
+}
 
 /* --- マウスでの範囲選択 --- */
 (function () {
@@ -1501,10 +1531,19 @@ function setSelection(r1, c1, r2, c2, sheet) {
     var hit = srcGrid.cellAt(e.clientX, e.clientY, true);
     if (!hit) return;
     var sh = activeSheet();
-    // 見出しクリック → 行/列まるごと
-    if (hit.rawR < 0 && hit.rawC >= 0) { setSelection(0, hit.c, Math.max(sh.usedRows - 1, 0), hit.c); return; }
-    if (hit.rawC < 0 && hit.rawR >= 0) { setSelection(hit.r, 0, hit.r, Math.max(sh.usedCols - 1, 0)); return; }
+    // 見出しクリック → 行/列まるごと選び、その場に固定などのメニューを出す
+    if (hit.rawR < 0 && hit.rawC >= 0) {
+      setSelection(0, hit.c, Math.max(sh.usedRows - 1, 0), hit.c);
+      openHeaderMenu("c", hit.c, e.clientX + 2, e.clientY + 6);
+      return;
+    }
+    if (hit.rawC < 0 && hit.rawR >= 0) {
+      setSelection(hit.r, 0, hit.r, Math.max(sh.usedCols - 1, 0));
+      openHeaderMenu("r", hit.r, e.clientX + 2, e.clientY + 6);
+      return;
+    }
     if (hit.rawR < 0 && hit.rawC < 0) { selectAll(); return; }
+    closeHeaderMenu();
     if (e.shiftKey && S.sel && S.sel.sheet === S.active) {
       setSelection(S.sel.r1, S.sel.c1, hit.r, hit.c);
       return;
@@ -1547,6 +1586,71 @@ function setSelection(r1, c1, r2, c2, sheet) {
     srcGrid.scrollToCell(S.sel.r2, S.sel.c2);
   });
 })();
+
+/* --- 行・列の見出しを押したときのメニュー --- */
+var hmenuEl = null;
+function closeHeaderMenu() {
+  if (hmenuEl && hmenuEl.parentNode) hmenuEl.parentNode.removeChild(hmenuEl);
+  hmenuEl = null;
+}
+/** kind は "r"（行）か "c"（列）。i はその番号（0 始まり） */
+function openHeaderMenu(kind, i, x, y) {
+  closeHeaderMenu();
+  var sh = activeSheet();
+  if (!sh) return;
+  var fz = sh.freeze || { r: 0, c: 0 };
+  var isRow = kind === "r";
+  var label = isRow ? (i + 1) + "行目" : colName(i) + "列";
+  var frozenHere = isRow ? fz.r === i : fz.c === i;
+
+  hmenuEl = el("div", "hmenu");
+  hmenuEl.appendChild(el("div", "ttl", label));
+
+  var b1 = el("button", null, isRow ? "この行の上で固定" : "この列の左で固定");
+  if (i === 0) {
+    b1.disabled = true;
+    b1.style.opacity = ".45";
+    b1.style.cursor = "not-allowed";
+    b1.textContent = isRow ? "1行目より上は固定できません" : "A列より左は固定できません";
+  }
+  b1.addEventListener("click", function () {
+    if (i === 0) return;
+    sh.freeze = { r: isRow ? i : (fz.r || 0), c: isRow ? (fz.c || 0) : i };
+    closeHeaderMenu();
+    renderSrc();
+    log("固定: " + (sh.freeze.r ? sh.freeze.r + "行目まで" : "") +
+      (sh.freeze.r && sh.freeze.c ? " / " : "") + (sh.freeze.c ? colName(sh.freeze.c - 1) + "列まで" : ""), "ok");
+    toast("スクロールしても " + label + "の" + (isRow ? "上" : "左") + "が残ります");
+  });
+  hmenuEl.appendChild(b1);
+
+  if (fz.r || fz.c) {
+    var b2 = el("button", null, "固定を解除");
+    b2.addEventListener("click", function () {
+      sh.freeze = null; closeHeaderMenu(); renderSrc(); log("固定を解除しました");
+    });
+    hmenuEl.appendChild(b2);
+  }
+  if (frozenHere) hmenuEl.firstChild.textContent = label + "（固定中）";
+
+  var b3 = el("button", null, isRow ? "この行を選択" : "この列を選択");
+  b3.addEventListener("click", function () {
+    if (isRow) setSelection(i, 0, i, Math.max(Math.min(sh.usedCols, MAX_COLS) - 1, 0));
+    else setSelection(0, i, Math.max(sh.usedRows - 1, 0), i);
+    closeHeaderMenu();
+  });
+  hmenuEl.appendChild(b3);
+
+  document.body.appendChild(hmenuEl);
+  var w = hmenuEl.offsetWidth, h = hmenuEl.offsetHeight;
+  hmenuEl.style.left = Math.min(x, window.innerWidth - w - 8) + "px";
+  hmenuEl.style.top = Math.min(y, window.innerHeight - h - 8) + "px";
+}
+document.addEventListener("pointerdown", function (e) {
+  if (hmenuEl && !hmenuEl.contains(e.target)) closeHeaderMenu();
+}, true);
+document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeHeaderMenu(); });
+window.addEventListener("resize", closeHeaderMenu);
 
 function selectAll() {
   var sh = activeSheet();
@@ -2171,6 +2275,7 @@ function runCommand(raw) {
     var b = r.block;
     setSelection(b.r1, b.c1, b.r2, b.c2, b.sheet);
     if (b.sheet !== S.active) { S.active = b.sheet; renderSheetList(); renderSrcTabs(); renderSrc(); }
+    revealSelection();
   }
   renderOut(); renderBlockList();
   if (r.block) revealBlock(r.block);
@@ -2610,19 +2715,16 @@ $("btnGen").addEventListener("click", generate);
 $("btnSelAll").addEventListener("click", selectAll);
 $("btnAddOut").addEventListener("click", function () { addOutSheet(); toast("出力シートを追加しました"); });
 
-$("btnApplyRef").addEventListener("click", applyRefInputs);
-$("refFrom").addEventListener("keydown", function (e) { if (e.key === "Enter") applyRefInputs(); });
-$("refTo").addEventListener("keydown", function (e) { if (e.key === "Enter") applyRefInputs(); });
-function applyRefInputs() {
-  if (!activeSheet()) { toast("先にExcelを読み込んでください", "wa"); return; }
-  var fromTxt = toHalf($("refFrom").value), toTxt = toHalf($("refTo").value);
-  var a = parseCell(fromTxt), b = parseCell(toTxt || fromTxt);
-  if (!a) { toast("開始セルを A1 の形式で入力してください", "er"); return; }
-  if (!b) b = a;
-  setSelection(a.r, a.c, b.r, b.c);
-  srcGrid.scrollToCell(a.r, a.c);
-  log("範囲を選択: " + rangeLabel(S.sel));
+/* --- 元データの全画面表示 --- */
+function setMaxSrc(on) {
+  document.body.classList.toggle("srcmax", on);
+  $("btnMaxSrc").textContent = on ? "⤡ 戻す" : "⤢ 全画面";
+  $("btnMaxSrc").title = on ? "元の3画面に戻します（Escでも戻れます）" : "元データを画面いっぱいに表示します（Escで戻る）";
+  requestAnimationFrame(function () { srcGrid.refresh(); dstGrid.refresh(); });
 }
+$("btnMaxSrc").addEventListener("click", function () {
+  setMaxSrc(!document.body.classList.contains("srcmax"));
+});
 
 /* --- ウィンドウ枠の固定 / 非表示の表示 --- */
 $("btnFreeze").addEventListener("click", function () {
@@ -2708,6 +2810,10 @@ $("btnPlace").addEventListener("click", function () {
   toast("出力シートで置きたいセルをクリックしてください");
 });
 document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape" && document.body.classList.contains("srcmax")
+      && !S.armed && !/input|textarea/i.test(e.target.tagName)) {
+    setMaxSrc(false);
+  }
   if (e.key === "Escape" && S.armed) {
     S.armed = null; clearGhost();
     $("dstGrid").classList.remove("armed");
@@ -2887,7 +2993,9 @@ window.__app = {
   execLine: execLine, expandScript: expandScript, runScript: runScript,
   scriptFromBlocks: scriptFromBlocks, parseValueList: parseValueList,
   wrapAsRepeat: wrapAsRepeat, commonRowNumber: commonRowNumber,
-  loadFile: loadFile, showLoading: showLoading, setStage: setStage
+  loadFile: loadFile, showLoading: showLoading, setStage: setStage,
+  parseCell: parseCell, setMaxSrc: setMaxSrc, openHeaderMenu: openHeaderMenu,
+  revealSelection: revealSelection
 };
 })();
 </script>
