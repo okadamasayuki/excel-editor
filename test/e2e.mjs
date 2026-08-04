@@ -53,10 +53,21 @@ function check(name, cond, extra) {
   console.log(`${cond ? "  ok  " : " FAIL "} ${name}${extra ? ` (${extra})` : ""}`);
 }
 
-/** サンプルに戻す。最初の画面を閉じたあとはボタンが無いので、アプリの API で読む */
+/** サンプルだけを開いた状態に戻す。最初の画面を閉じたあとはボタンが無いので API で読む */
 async function loadSampleAgain() {
-  await page.evaluate(() => window.__app.loadSample());
+  await page.evaluate(() => {
+    const A = window.__app;
+    while (A.S.files.length) A.removeFile(0);
+    A.loadSample();
+  });
   await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
+}
+
+/** そのファイルだけを開いた状態にする（複数開けるようになったので、前のは閉じる） */
+async function openOnly(path, name, timeout) {
+  await page.evaluate(() => { const A = window.__app; while (A.S.files.length) A.removeFile(0); });
+  await page.setInputFiles("#fileInput", path);
+  await page.waitForFunction((n) => window.__app.S.fileName === n, name, { timeout: timeout || 20000 });
 }
 
 /** いま選んでいる範囲を "売上明細!A2:D6 5×4" の形で返す（画面には出さなくなったため） */
@@ -617,8 +628,7 @@ await page.evaluate(() => {
   new MutationObserver(rec).observe(box, { attributes: true, subtree: true, childList: true, characterData: true });
   rec();
 });
-await page.setInputFiles("#fileInput", bigPath);
-await page.waitForFunction(() => window.__app.S.fileName === "大きい売上.xlsx", { timeout: 30000 });
+await openOnly(bigPath, "大きい売上.xlsx", 30000);
 const seen = await page.evaluate(() => window.__seen);
 check("読み込み中の表示が出る", seen.length > 0, seen.slice(0, 4).join(" → "));
 check("「解析中」の段階が出る", seen.some((s) => /解析中/.test(s)), seen.join(" → "));
@@ -673,8 +683,7 @@ await loadSampleAgain();
 await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
 
 // ---- 9d. Excel で開いたときと同じ見え方（色・非表示・幅・固定） ----------
-await page.setInputFiles("#fileInput", join(root, "test/fixtures/書式つき.xlsx"));
-await page.waitForFunction(() => window.__app.S.fileName === "書式つき.xlsx", { timeout: 20000 });
+await openOnly(join(root, "test/fixtures/書式つき.xlsx"), "書式つき.xlsx");
 
 // 塗りつぶし色がそのまま出る
 const fillA1 = await page.$eval('#srcGrid .gc[data-r="0"][data-c="0"]', (n) => getComputedStyle(n).backgroundColor);
@@ -930,11 +939,119 @@ await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = n
 await loadSampleAgain();
 await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
 
+// ---- 9e-2. 元データを複数のファイルで開く -------------------------------
+await loadSampleAgain();
+const sheetsBefore = await page.evaluate(() => window.__app.S.sheets.length);
+await page.setInputFiles("#fileInput", join(root, "test/fixtures/書式つき.xlsx"));
+await page.waitForFunction(() => window.__app.S.files.length === 2, { timeout: 20000 });
+const two = await page.evaluate(() => ({
+  files: window.__app.S.files.map((f) => f.name),
+  sheets: window.__app.S.sheets.map((sh) => sh.name + "@" + sh.file),
+  active: window.__app.S.active,
+  chip: document.getElementById("fileName").textContent,
+  meta: document.getElementById("fileMeta").textContent,
+  heads: [...document.querySelectorAll("#sheetList .file-head .fn")].map((n) => n.textContent),
+}));
+check("2つめのファイルを開いても1つめは残る", two.files.length === 2, JSON.stringify(two.files));
+check("シートは足されていく",
+  two.sheets.length === sheetsBefore + 2, JSON.stringify(two.sheets));
+check("足したファイルの先頭シートを見せる", two.active === sheetsBefore, String(two.active));
+check("上の表示はファイル数とシート数になる",
+  /ほか1件/.test(two.chip) && /2ファイル/.test(two.meta), two.chip + " / " + two.meta);
+check("シート一覧はファイルごとにまとまる",
+  two.heads.join(",") === "サンプル売上.xlsx,書式つき.xlsx", two.heads.join(","));
+
+// 別のファイルのシートからも、いつもどおり置ける
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript("シート追加 合体\n売上明細のA1:C3を合体のA1に置く\n書式つきのA1:C3を合体のA5に置く", true);
+});
+await page.waitForTimeout(200);
+const mixed = await page.$$eval("#blockList .block-card",
+  (ns) => ns.map((n) => n.querySelector(".src").textContent));
+check("別々のファイルのシートを 1 枚にまとめられる",
+  mixed.join(",") === "売上明細!A1:C3,書式つき!A1:C3", mixed.join(","));
+
+// 生成すると、両方のファイルの中身が 1 つのブックに入る
+const [dlMix] = await Promise.all([page.waitForEvent("download"), page.click("#btnGen")]);
+const mixPath = join(tmp, "mixed.xlsx");
+await dlMix.saveAs(mixPath);
+const mixWb = XLSX.read(readFileSync(mixPath), { type: "buffer" });
+const mixWs = mixWb.Sheets["合体"];
+check("1つめのファイルの値が入る", mixWs["A1"] && mixWs["A1"].v === "売上明細", mixWs["A1"] && String(mixWs["A1"].v));
+check("2つめのファイルの値も入る",
+  mixWs["A5"] && mixWs["A5"].v === "月次売上レポート", mixWs["A5"] && String(mixWs["A5"].v));
+check("書き出す名前は1つめのファイルから",
+  dlMix.suggestedFilename() === "サンプル売上_抜粋.xlsx", dlMix.suggestedFilename());
+
+// 手順書には開いているファイルが全部載る
+await page.click("#btnScript");
+await page.click("#scFromBlocks");
+const multiScript = await page.inputValue("#scText");
+check("手順書に元ファイルが全部載る",
+  /# 元ファイル: サンプル売上\.xlsx, 書式つき\.xlsx/.test(multiScript),
+  multiScript.split("\n")[0]);
+await page.click("#scClose");
+
+// ファイルを閉じると、そのファイルを使っていたブロックも一緒に消える
+await page.evaluate(() => window.__app.removeFile(1));
+await page.waitForTimeout(200);
+const afterClose = await page.evaluate(() => ({
+  files: window.__app.S.files.map((f) => f.name),
+  sheets: window.__app.S.sheets.map((sh) => sh.name),
+  blocks: window.__app.S.out.flatMap((o) => o.blocks.map((b) => window.__app.S.sheets[b.sheet].name)),
+}));
+check("ファイルを閉じられる", afterClose.files.join(",") === "サンプル売上.xlsx", afterClose.files.join(","));
+check("閉じたファイルのシートも消える",
+  afterClose.sheets.join(",") === "売上明細,支店別サマリ,商品マスタ", afterClose.sheets.join(","));
+check("閉じたファイルのブロックだけが外れる",
+  afterClose.blocks.join(",") === "売上明細", afterClose.blocks.join(","));
+
+// 同じ名前のシートがあるときは、ファイル名で指定できる
+const dupPath = join(tmp, "もう一つ.xlsx");
+{
+  const w = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(w, XLSX.utils.aoa_to_sheet([["別の売上明細"], ["x", "y"]]), "売上明細");
+  writeFileSync(dupPath, XLSX.write(w, { bookType: "xlsx", type: "buffer" }));
+}
+await page.setInputFiles("#fileInput", dupPath);
+await page.waitForFunction(() => window.__app.S.files.length === 2, { timeout: 20000 });
+check("同名シートはタブにファイル名を添える", await page.evaluate(() =>
+  [...document.querySelectorAll("#srcTabs .tab")].map((n) => n.textContent).join(",")
+    === "売上明細（サンプル売上.xlsx）,支店別サマリ,商品マスタ,売上明細（もう一つ.xlsx）"),
+  await page.evaluate(() => [...document.querySelectorAll("#srcTabs .tab")].map((n) => n.textContent).join(",")));
+const picked = await page.evaluate(() => ({
+  plain: window.__app.matchSheetName("売上明細のA1:B2"),
+  qualified: window.__app.matchSheetName("[もう一つ.xlsx]売上明細のA1:B2"),
+}));
+check("ファイル名で指定すると、そのファイルのシートになる",
+  picked.qualified.i === 3 && picked.plain.i === 0, JSON.stringify(picked));
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript("シート追加 同名\n[もう一つ.xlsx]売上明細のA1:A1を同名のA1に置く", true);
+});
+await page.waitForTimeout(200);
+check("手順書でもファイル名で指定できる", await page.evaluate(() => {
+  const b = window.__app.S.out[0].blocks[0];
+  return b && window.__app.S.sheets[b.sheet].file === 1;
+}));
+// 同名があるときは、今の配置から作る手順書もファイル名つきになる
+await page.click("#btnScript");
+await page.click("#scFromBlocks");
+check("同名シートは手順書でもファイル名つきで書く",
+  /\[もう一つ\.xlsx\]売上明細の/.test(await page.inputValue("#scText")),
+  (await page.inputValue("#scText")).split("\n").filter((l) => /置く/.test(l)).join(" / "));
+await page.click("#scClose");
+
+await loadSampleAgain();
+await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
+
 // ---- 9f. 末尾は「値の入っている範囲」で判断する -------------------------
 // 行まるごとの選択は使用範囲いっぱい（末尾は空欄だらけ）になる。
 // 空欄まで末尾に数えると、ずっと右の何も無い場所へ飛んでしまう
-await page.setInputFiles("#fileInput", join(root, "test/fixtures/横長.xlsx"));
-await page.waitForFunction(() => window.__app.S.fileName === "横長.xlsx", { timeout: 20000 });
+await openOnly(join(root, "test/fixtures/横長.xlsx"), "横長.xlsx");
 const sparse = await page.evaluate(() => {
   const A = window.__app;
   A.S.out = []; A.S.selBlock = null;
@@ -969,8 +1086,7 @@ await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上
 // ---- 9f-2. 横に重ねて 120 列を超えても壊れない -------------------------
 // 描画列数に上限があると、その先の位置が座標を持たず NaN になり、
 // 目印も表示も左上（A1）へ落ちてしまっていた
-await page.setInputFiles("#fileInput", join(root, "test/fixtures/横長.xlsx"));
-await page.waitForFunction(() => window.__app.S.fileName === "横長.xlsx", { timeout: 20000 });
+await openOnly(join(root, "test/fixtures/横長.xlsx"), "横長.xlsx");
 await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
 const wide = [];
 for (let i = 0; i < 5; i++) {
@@ -1413,7 +1529,7 @@ check("セルの値は保存領域に残らない", leaked.length === 0, leaked.
 await page.reload();
 await page.waitForFunction(() => !!window.__app);
 check("再読み込みで読み込んだブックは消える",
-  await page.evaluate(() => window.__app.S.wb === null && window.__app.S.sheets.length === 0));
+  await page.evaluate(() => window.__app.S.files.length === 0 && window.__app.S.sheets.length === 0));
 check("手順書はブラウザに残さない",
   (await page.evaluate(() => localStorage.getItem("excel-extract-recipes-v1"))) === null);
 

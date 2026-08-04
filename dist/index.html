@@ -231,6 +231,19 @@ body.stacked .splitter::after {
 .rail-section:has(.rail-head[aria-expanded="false"]) { padding-bottom: 2px; }
 @media (prefers-reduced-motion: reduce) { .rail-head .caret { transition: none; } }
 .sheetlist { display: flex; flex-direction: column; gap: 2px; }
+/* シート一覧の中の、ファイルごとの見出し */
+.file-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px 3px; font-size: 10.5px; font-weight: 700;
+  color: var(--muted); font-family: var(--font-mono);
+}
+.file-head .fn { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-head .x {
+  flex: none; border: none; background: transparent; color: var(--muted);
+  cursor: pointer; font-size: 13px; line-height: 1; padding: 0 3px; border-radius: 4px;
+}
+.file-head .x:hover { color: var(--bad); background: var(--sunken); }
+
 .sheet-item {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 8px; border-radius: var(--r-sm);
@@ -727,7 +740,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
     </div>
     <div id="fileChip" class="filechip" hidden><span class="dot"></span><b id="fileName"></b><span id="fileMeta" class="mono"></span></div>
     <div class="spacer"></div>
-    <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xlsb,.xls,.csv" hidden>
+    <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xlsb,.xls,.csv" multiple hidden>
     <button class="btn ghost" id="btnLayout" title="元データと出力シートの並べ方を切り替えます">⇅ 上下に並べる</button>
     <button class="btn" id="btnScript" title="同じ作業を使い回す手順書を開きます">手順書</button>
     <button class="btn" id="btnOpen">ファイルを開く</button>
@@ -997,7 +1010,8 @@ function toHalf(s) {
    1. 状態
    ============================================================ */
 var S = {
-  wb: null, fileName: "", sheets: [], active: 0,
+  files: [],            // 読み込んだファイル [{name, wb}]。シートは file でここを指す
+  fileName: "", sheets: [], active: 0,
   sel: null,            // {sheet, r1,c1,r2,c2}
   dsel: null,           // 出力側で選んだ範囲（集計の対象）
   extras: [],           // 追加選択（Ctrl+ドラッグ）
@@ -1348,40 +1362,90 @@ function readWorkbook(data, name) {
   if (!wb.SheetNames.some(function (nm) { return hasAnyCell(wb.Sheets[nm]); })) {
     showLoadWarn("データが1件も見つかりませんでした",
       "Excelファイルではないか、中身が空の可能性があります。"
-      + (S.wb ? "いま開いているブックはそのままです。" : "ファイルの形式をご確認ください。"));
+      + (S.sheets.length ? "いま開いているファイルはそのままです。" : "ファイルの形式をご確認ください。"));
     return false;
   }
 
-  S.wb = wb; S.fileName = name;
-  S.sheets = wb.SheetNames.map(function (nm) {
+  // 読み込んだファイルは足していく（前のファイルは開いたまま）
+  var fi = S.files.length;
+  S.files.push({ name: name, wb: wb });
+  var added = wb.SheetNames.map(function (nm) {
     var ws = wb.Sheets[nm];
     var ref = ws["!ref"] || "A1";
     var rg = XLSX.utils.decode_range(ref);
-    var rows = Math.max(rg.e.r - rg.s.r + 1, 1);
-    var cols = Math.max(rg.e.c - rg.s.c + 1, 1);
     return {
-      name: nm, ws: ws,
+      name: nm, ws: ws, file: fi,
       rows: Math.min(rg.e.r + 1, 200000), cols: Math.min(rg.e.c + 1, MAX_COLS),
       usedRows: rg.e.r + 1, usedCols: rg.e.c + 1,
       merges: ws["!merges"] || [], colsMeta: ws["!cols"] || [], rowsMeta: ws["!rows"] || [],
       freeze: null
     };
   });
-  S.active = 0; S.sel = null; S.extras = [];
+  S.active = S.sheets.length;              // 足したファイルの先頭シートを見せる
+  S.sheets = S.sheets.concat(added);
+  S.fileName = S.files[0].name;            // 書き出すときの名前は 1 つめのファイルから
+  S.sel = null; S.extras = [];
   if (!S.out.length) addOutSheet("抜粋1", true);
 
   $("dropzone").hidden = true;
   $("srcGrid").hidden = false;
   $("fileChip").hidden = false;
-  $("fileName").textContent = name;
-  $("fileMeta").textContent = S.sheets.length + "シート";
+  renderFileChip();
   $("btnGen").disabled = false;
 
   // 新しいブックは必ず左上から見せる（前のファイルのスクロール位置を引きずらない）
   $("srcGrid").scrollTop = 0; $("srcGrid").scrollLeft = 0;
-  renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList();   var totalRows = S.sheets.reduce(function (a, s) { return a + s.usedRows; }, 0);
-  toast(name + " を読み込みました（" + S.sheets.length + "シート）");
+  renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList();
+  toast(name + " を読み込みました（" + added.length + "シート）"
+    + (S.files.length > 1 ? " ／ 合わせて " + S.files.length + "ファイル" : ""));
   return true;
+}
+
+/** 上のファイル表示。複数あるときは「ほかN件」とまとめる */
+function renderFileChip() {
+  var n = S.files.length;
+  $("fileName").textContent = n ? S.files[0].name + (n > 1 ? " ほか" + (n - 1) + "件" : "") : "";
+  $("fileMeta").textContent = (n > 1 ? n + "ファイル / " : "") + S.sheets.length + "シート";
+  $("fileChip").title = S.files.map(function (f) { return f.name; }).join("\n");
+}
+
+/**
+ * ファイルを 1 つ閉じる。そのファイルのシートを使っているブロックは一緒に消え、
+ * 残りのシート番号は詰め直す（ブロックはシートを番号で指しているため）
+ */
+function removeFile(fi) {
+  if (!S.files[fi]) return;
+  var name = S.files[fi].name;
+  var map = {}, kept = [];
+  S.sheets.forEach(function (sh, i) {
+    if (sh.file === fi) return;
+    map[i] = kept.length;
+    if (sh.file > fi) sh.file--;
+    kept.push(sh);
+  });
+  var dropped = 0;
+  snapshot();
+  S.out.forEach(function (o) {
+    o.blocks = o.blocks.filter(function (b) {
+      if (map[b.sheet] === undefined) { dropped++; return false; }
+      b.sheet = map[b.sheet];
+      return true;
+    });
+  });
+  S.sheets = kept;
+  S.files.splice(fi, 1);
+  S.fileName = S.files.length ? S.files[0].name : "";
+  S.active = clamp(S.active, 0, Math.max(S.sheets.length - 1, 0));
+  S.sel = null; S.extras = []; S.selBlock = null;
+
+  if (!S.sheets.length) {
+    $("dropzone").hidden = false;
+    $("srcGrid").hidden = true;
+    $("fileChip").hidden = true;
+    $("btnGen").disabled = true;
+  } else renderFileChip();
+  renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList();
+  toast(name + " を閉じました" + (dropped ? "（ブロック " + dropped + " 件も外しました）" : ""));
 }
 
 /* --- 読み込み中の表示 --- */
@@ -1439,7 +1503,7 @@ function afterPaint(fn) {
   });
 }
 
-function loadFile(file) {
+function loadFile(file, done) {
   if (!file) return;
   var okExt = /\.(xlsx|xlsm|xlsb|xls|csv|txt)$/i.test(file.name);
   showLoading(file.name, file.size);
@@ -1463,7 +1527,7 @@ function loadFile(file) {
       var ok = false;
       try { ok = readWorkbook(new Uint8Array(buf), file.name); }
       catch (err) { showLoadError("解析できませんでした", String(err && err.message || err)); return; }
-      if (ok) hideLoading();
+      if (ok) { hideLoading(); if (done) done(); }
     });
   };
   fr.onerror = function () {
@@ -1471,6 +1535,17 @@ function loadFile(file) {
       "ファイルが移動・削除されたか、アクセスできない可能性があります。");
   };
   fr.readAsArrayBuffer(file);
+}
+
+/** 選んだ／落としたファイルを、1 つずつ順に読み込む（何個でも足せる） */
+function loadFiles(list, done) {
+  var files = Array.prototype.slice.call(list || []);
+  if (!files.length) return;
+  var i = 0;
+  (function next() {
+    if (i >= files.length) { if (done) done(); return; }
+    loadFile(files[i++], next);
+  })();
 }
 
 /* --- サンプルブック --- */
@@ -1507,6 +1582,15 @@ function sampleWorkbook() {
   return wb;
 }
 function loadSample() {
+  // 何度押しても増えないよう、同じサンプルが開いていたらそれを見せるだけにする
+  var at = -1;
+  S.files.forEach(function (f, i) { if (f.name === "サンプル売上.xlsx") at = i; });
+  if (at >= 0) {
+    for (var i = 0; i < S.sheets.length; i++) {
+      if (S.sheets[i].file === at) { switchSheet(i); break; }
+    }
+    return;
+  }
   var wb = sampleWorkbook();
   readWorkbook(new Uint8Array(XLSX.write(wb, { bookType: "xlsx", type: "array" })), "サンプル売上.xlsx");
 }
@@ -1808,7 +1892,21 @@ function selectAll() {
 function renderSheetList() {
   var box = $("sheetList");
   box.innerHTML = "";
+  var curFile = -1;
   S.sheets.forEach(function (sh, i) {
+    // ファイルが変わったら、そのファイルの見出しを挟む（どこから来たシートか分かる）
+    if (sh.file !== curFile) {
+      curFile = sh.file;
+      var f = S.files[curFile];
+      var head = el("div", "file-head");
+      head.appendChild(el("span", "fn", f ? f.name : "(不明)"));
+      var kill = el("button", "x", "×");
+      kill.title = "このファイルを閉じる";
+      kill.setAttribute("aria-label", (f ? f.name : "") + " を閉じる");
+      kill.addEventListener("click", function (e) { e.stopPropagation(); removeFile(curFile); });
+      head.appendChild(kill);
+      box.appendChild(head);
+    }
     var b = el("div", "sheet-item");
     b.setAttribute("role", "button");
     b.tabIndex = 0;
@@ -1828,14 +1926,15 @@ function renderSheetList() {
     b.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
     box.appendChild(b);
   });
-  if (!S.sheets.length) box.innerHTML = '<p class="empty-note">ファイルを開くとシートが並びます。シート名をつまんで出力側へ落とすと、シート全体をまるごと配置できます。</p>';
+  if (!S.sheets.length) box.innerHTML = '<p class="empty-note">ファイルを開くとシートが並びます。ファイルは何個でも開けます。シート名をつまんで出力側へ落とすと、シート全体をまるごと配置できます。</p>';
 }
 
 function renderSrcTabs() {
   var tabs = $("srcTabs");
   tabs.innerHTML = "";
   S.sheets.forEach(function (sh, i) {
-    var t = el("button", "tab", sh.name);
+    var t = el("button", "tab", sheetLabel(i));
+    t.title = sheetFullName(i);
     t.setAttribute("aria-current", i === S.active ? "true" : "false");
     t.draggable = true;
     t.addEventListener("click", function () { switchSheet(i); });
@@ -1929,7 +2028,7 @@ function renderOut() {
   dstGrid.refresh();
   renderOutOverlay(cont);
   renderDstStats();
-  $("btnGen").disabled = !S.wb;
+  $("btnGen").disabled = !S.sheets.length;
   renderInspector();
   // 元データ側の「持っていった範囲」の枠もブロックから作るので、ここで一緒に描き直す
   renderSrcOverlay();
@@ -2359,9 +2458,42 @@ function dropPayload(p, r, c) {
 /* ============================================================
    7. 文章コマンド
    ============================================================ */
+/** 同じ名前のシートが別のファイルにもあるか */
+function sheetNameIsAmbiguous(i) {
+  var sh = S.sheets[i];
+  if (!sh) return false;
+  return S.sheets.some(function (o, j) { return j !== i && o.name === sh.name; });
+}
+/** タブに出す名前。名前がぶつかるときだけファイル名を添える */
+function sheetLabel(i) {
+  var sh = S.sheets[i];
+  if (!sh) return "";
+  if (!sheetNameIsAmbiguous(i)) return sh.name;
+  var f = S.files[sh.file];
+  return sh.name + "（" + (f ? f.name : "?") + "）";
+}
+/** 手順書に書くときの名前。ぶつかるときは [ファイル名]シート名 と書く */
+function sheetFullName(i) {
+  var sh = S.sheets[i];
+  if (!sh) return "";
+  var f = S.files[sh.file];
+  return (f ? "[" + f.name + "]" : "") + sh.name;
+}
+/**
+ * 文章の中からシートを見つける。
+ * 「[売上_2026.xlsx]売上明細」のようにファイル名で絞り込める（同名シート対策）。
+ */
 function matchSheetName(text) {
+  var only = null;
+  var fm = /[\[［]([^\]］]+)[\]］]/.exec(text);
+  if (fm) {
+    var fname = fm[1].trim();
+    S.files.forEach(function (f, fi) { if (f.name === fname) only = fi; });
+    if (only === null) S.files.forEach(function (f, fi) { if (f.name.indexOf(fname) >= 0) only = fi; });
+  }
   var best = null;
   S.sheets.forEach(function (sh, i) {
+    if (only !== null && sh.file !== only) return;
     var idx = text.indexOf(sh.name);
     if (idx >= 0 && (!best || sh.name.length > best.len)) best = { i: i, len: sh.name.length, at: idx };
   });
@@ -2608,8 +2740,15 @@ function runScript(text, clearFirst) {
 
   // 「# 元ファイル:」と実際に開いているファイルが違うときは注意を出す（別の人が使う想定）
   var fm = /^[#\s]*元ファイル\s*[:：]\s*(.+)$/m.exec(toHalf(text));
-  if (fm && S.fileName && fm[1].trim() !== S.fileName) {
-    toast("この手順書は「" + fm[1].trim() + "」用に作られています。シート名が違うと失敗します。", "wa");
+  if (fm && S.files.length) {
+    var want = fm[1].split(/[,、]/).map(function (x) { return x.trim(); }).filter(Boolean);
+    var have = S.files.map(function (f) { return f.name; });
+    var missing = want.filter(function (w) { return have.indexOf(w) < 0; });
+    if (missing.length === want.length) {
+      toast("この手順書は「" + want.join(", ") + "」用に作られています。シート名が違うと失敗します。", "wa");
+    } else if (missing.length) {
+      toast("開いていないファイルがあります: " + missing.join(", "), "wa");
+    }
   }
 
   var ex = expandScript(text);
@@ -2660,7 +2799,8 @@ function scriptFromBlocks() {
   var d = new Date();
   var stamp = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   var L = [];
-  L.push("# 元ファイル: " + (S.fileName || "(未読込)"));
+  L.push("# 元ファイル: " + (S.files.length
+    ? S.files.map(function (f) { return f.name; }).join(", ") : "(未読込)"));
   L.push("# 作成日: " + stamp);
   L.push("説明: （この手順書が何をするものか、ここに書いてください）");
   L.push("");
@@ -2670,7 +2810,9 @@ function scriptFromBlocks() {
     any = true;
     L.push("シート追加 " + o.name);
     o.blocks.forEach(function (b) {
-      L.push(S.sheets[b.sheet].name + "の" + rangeLabel(b) + "を" + o.name + "の" + a1(b.dr, b.dc) + "に置く"
+      // 同じ名前のシートが別のファイルにもあるときだけ [ファイル名] を添える
+      var nm = sheetNameIsAmbiguous(b.sheet) ? sheetFullName(b.sheet) : S.sheets[b.sheet].name;
+      L.push(nm + "の" + rangeLabel(b) + "を" + o.name + "の" + a1(b.dr, b.dc) + "に置く"
         + (b.trans ? "（転置）" : ""));
     });
     L.push("");
@@ -2751,7 +2893,9 @@ function commonSheetName(lines) {
 
 /** シート名に含まれる数字を巻き込まないよう、いったん退避する */
 function protectSheetNames(s, store) {
+  // ファイル名（売上_2026.xlsx の 2026 など）も、シート名と同じように退避する
   var names = S.sheets.concat(S.out).map(function (sh) { return sh.name; })
+    .concat(S.files.map(function (f) { return f.name; }))
     .filter(Boolean).sort(function (a, b) { return b.length - a.length; });
   names.forEach(function (name, i) {
     if (s.indexOf(name) < 0) return;
@@ -2980,7 +3124,7 @@ function saveBlob(blob, name) {
 }
 
 function generate() {
-  if (!S.wb) { toast("先にExcelを読み込んでください", "wa"); return; }
+  if (!S.sheets.length) { toast("先にExcelを読み込んでください", "wa"); return; }
   var wb = buildWorkbook();
   if (!wb) { toast("配置されたブロックがありません。範囲を選んで出力シートへ置いてください。", "wa"); return; }
   var base = (S.fileName || "book").replace(/\.[^.]+$/, "");
@@ -3010,7 +3154,7 @@ function toast(msg, kind) {
    ============================================================ */
 $("btnOpen").addEventListener("click", function () { $("fileInput").click(); });
 $("btnOpen2").addEventListener("click", function () { $("fileInput").click(); });
-$("fileInput").addEventListener("change", function (e) { loadFile(e.target.files[0]); e.target.value = ""; });
+$("fileInput").addEventListener("change", function (e) { loadFiles(e.target.files); e.target.value = ""; });
 $("loadClose").addEventListener("click", hideLoading);
 $("btnSample2").addEventListener("click", loadSample);
 $("btnGen").addEventListener("click", generate);
@@ -3334,7 +3478,7 @@ window.addEventListener("drop", function (e) {
   if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
   e.preventDefault();
   document.body.classList.remove("filedrag");
-  loadFile(e.dataTransfer.files[0]);
+  loadFiles(e.dataTransfer.files);
 });
 
 window.addEventListener("resize", function () { srcGrid.schedule(); dstGrid.schedule(); });
@@ -3367,7 +3511,9 @@ window.__app = {
   execLine: execLine, expandScript: expandScript, runScript: runScript,
   scriptFromBlocks: scriptFromBlocks, parseValueList: parseValueList,
   wrapAsRepeat: wrapAsRepeat, commonRowNumber: commonRowNumber, openScript: openScript,
-  loadFile: loadFile, showLoading: showLoading, setStage: setStage,
+  loadFile: loadFile, loadFiles: loadFiles, removeFile: removeFile,
+  sheetFullName: sheetFullName, matchSheetName: matchSheetName,
+  showLoading: showLoading, setStage: setStage,
   parseCell: parseCell, setMaxSrc: setMaxSrc, setMaxPane: setMaxPane, openHeaderMenu: openHeaderMenu,
   setDstSel: setDstSel, clearDstSel: clearDstSel,
   revealSelection: revealSelection,
