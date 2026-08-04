@@ -728,7 +728,30 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
   padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
   font-size: 12px; font-weight: 700;
 }
-.cheat-body { overflow: auto; padding: 4px 0; }
+.cheat-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; min-height: 0; }
+.cheat-list { overflow: auto; padding: 4px 0; min-height: 0; }
+.cheat-preview {
+  border-left: 1px solid var(--line); background: var(--panel);
+  padding: 12px; display: flex; flex-direction: column; gap: 9px; min-width: 0;
+}
+.mini { position: relative; }
+.mini canvas { display: block; width: 100%; height: auto; border-radius: 4px; }
+.mini .mb {
+  position: absolute; border: 1.5px solid var(--bc); border-radius: 2px;
+  background: color-mix(in srgb, var(--bc) 16%, transparent);
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+  font-family: var(--font-mono); font-size: 9px; font-weight: 700; color: var(--bc);
+  white-space: nowrap; opacity: 0; transform: translateY(-5px);
+  transition: opacity .26s ease, transform .26s cubic-bezier(.2,.9,.3,1);
+}
+.mini .mb.in { opacity: 1; transform: none; }
+.mini .mb.now { box-shadow: 0 0 0 2px color-mix(in srgb, var(--bc) 32%, transparent); }
+.mini-note { margin: 0; font-size: 11px; color: var(--muted); line-height: 1.65; }
+.mini-note b { color: var(--ink); font-weight: 700; }
+@media (max-width: 860px) {
+  .cheat-body { grid-template-columns: minmax(0, 1fr); }
+  .cheat-preview { border-left: none; border-top: 1px solid var(--line); }
+}
 .cheat h4 {
   margin: 0; padding: 9px 12px 4px; font-size: 10.5px; letter-spacing: .1em;
   color: var(--dst); font-family: var(--font-mono);
@@ -948,7 +971,13 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
           <span>手順書に書けること</span>
           <span class="hint">行をクリックすると、書き方をそのまま貼り付けます</span>
         </div>
-        <div class="cheat-body" id="cheatBody"></div>
+        <div class="cheat-body">
+          <div class="cheat-list" id="cheatBody"></div>
+          <div class="cheat-preview">
+            <div class="mini" id="cheatDemo"></div>
+            <p class="mini-note" id="cheatNote">左の行にカーソルを合わせると、どう置かれるかが動きます</p>
+          </div>
+        </div>
       </div>
 
       <textarea id="scText" class="script" spellcheck="false" placeholder="# 手順書の例（# で始まる行はメモ）
@@ -3219,6 +3248,7 @@ function showRepeatForm(kind) {
   $("repeatForm").hidden = false;
   $("scCheat").hidden = true;
   $("scHelp").textContent = "書き方の一覧";
+  stopMini();
   setRepeatKind(t.varName === "列" || t.varName === "シート" ? t.varName : "行");
   var h = REPEAT_HELP[repeatKind()] || REPEAT_HELP["行"];
   // シートは、開いているブックのシート名をそのまま初期値にしておく
@@ -3649,7 +3679,7 @@ $("inspTrans").addEventListener("change", function () {
 function openScript(open) {
   $("scriptModal").hidden = !open;
   if (open) $("scText").focus();
-  else hideRepeatForm();
+  else { hideRepeatForm(); stopMini(); }
 }
 $("btnScript").addEventListener("click", function () { openScript(true); });
 $("scClose").addEventListener("click", function () { openScript(false); });
@@ -3673,66 +3703,189 @@ $("scFromBlocks").addEventListener("click", function () {
   toast("手順書を作りました。説明を書き足して保存できます");
 });
 
-/* --- 手順書に書けることの一覧 --- */
+/* --- 手順書に書けることの一覧（行にカーソルを合わせると動きで見せる） --- */
+/**
+ * demo の書き方
+ *   k    "out"＝出力シートに置かれる様子 / "src"＝元データのどこを指すか
+ *   st   [行, 列, 高さ, 幅, ラベル, 色番号] の並び。順に出てくる
+ *   note 一言の説明
+ */
+function D(k, st, note, cols, rows) {
+  return { k: k, st: st, note: note, cols: cols || 10, rows: rows || 7 };
+}
 var CHEAT = [
   ["置く", [
-    ["売上明細のA1:D10を 抜粋1 のB2に置く", "元データの範囲を、出力シートの決まった場所へ"],
-    ["売上明細のA1:D10を続けて置く", "直前に置いたものの下へ。列は左端に戻る"],
-    ["売上明細のA1:D10を右に続けて置く", "直前に置いたものの右へ。横に並べたいとき"],
-    ["売上明細のA1:D10を 抜粋1 のB2に置く（転置）", "行と列を入れ替えて置く"],
-    ["売上明細のA1:D10 → 抜粋1のB2", "矢印でも書ける（→ / -> / ⇒ / =>）"]
+    { ex: "売上明細のA1:D10を 抜粋1 のB2に置く", ds: "元データの範囲を、出力シートの決まった場所へ",
+      demo: D("out", [[1, 1, 4, 4, "A1:D10", 0]], "B2 から、選んだ大きさのまま入ります") },
+    { ex: "売上明細のA1:D10を続けて置く", ds: "直前に置いたものの下へ。列は左端に戻る",
+      demo: D("out", [[0, 0, 2, 4, "1つめ", 0], [2, 0, 2, 4, "続けて", 1]], "直前のすぐ<b>下</b>へ。左端はそろう") },
+    { ex: "売上明細のA1:D10を右に続けて置く", ds: "直前に置いたものの右へ。横に並べたいとき",
+      demo: D("out", [[0, 0, 3, 3, "1つめ", 0], [0, 3, 3, 3, "右に", 1]], "直前のすぐ<b>右</b>へ。上をそろえて並ぶ") },
+    { ex: "売上明細のA1:D10を 抜粋1 のB2に置く（転置）", ds: "行と列を入れ替えて置く",
+      demo: D("out", [[0, 0, 2, 4, "そのまま", 0], [0, 5, 4, 2, "転置", 3]], "縦横が入れ替わって置かれます") },
+    { ex: "売上明細のA1:D10 → 抜粋1のB2", ds: "矢印でも書ける（→ / -> / ⇒ / =>）",
+      demo: D("out", [[1, 1, 4, 4, "A1:D10", 0]], "「〜を〜に置く」と同じ意味です") }
   ]],
   ["範囲の書き方", [
-    ["A1からD10", "セルからセルまで（A1:D10 / A1〜D10 でも同じ）"],
-    ["3行目", "その行まるごと"],
-    ["3行目から8行目", "行の範囲"],
-    ["B列", "その列まるごと"],
-    ["B列からD列", "列の範囲"],
-    ["全体", "そのシートで使われている範囲すべて"],
-    ["A1", "1 セルだけ"]
+    { ex: "A1からD10", ds: "セルからセルまで（A1:D10 / A1〜D10 でも同じ）",
+      demo: D("src", [[0, 0, 5, 4, "A1:D10", 1]], "四角く囲んだところ") },
+    { ex: "3行目", ds: "その行まるごと",
+      demo: D("src", [[2, 0, 1, 10, "3行目", 1]], "使われている列の<b>端から端まで</b>") },
+    { ex: "3行目から8行目", ds: "行の範囲",
+      demo: D("src", [[2, 0, 5, 10, "3〜8行目", 1]], "行をまとめて") },
+    { ex: "B列", ds: "その列まるごと",
+      demo: D("src", [[0, 1, 7, 1, "B列", 1]], "使われている行の<b>上から下まで</b>") },
+    { ex: "B列からD列", ds: "列の範囲",
+      demo: D("src", [[0, 1, 7, 3, "B〜D列", 1]], "列をまとめて") },
+    { ex: "全体", ds: "そのシートで使われている範囲すべて",
+      demo: D("src", [[0, 0, 7, 10, "全体", 1]], "空っぽの行・列は含みません") },
+    { ex: "A1", ds: "1 セルだけ",
+      demo: D("src", [[0, 0, 1, 1, "A1", 1]], "1 マスだけ") }
   ]],
   ["名前をつけて、その隣に置く", [
-    ["売上明細のA1:C4を 抜粋1 のA1に置く（名前: 見出し）", "置いたものに名前をつける"],
-    ["支店別サマリのA1:B4を 見出し の右に置く", "名前を指した相手のとなりへ。直前が何でも迷わない"],
-    ["商品マスタのA1:C3を 見出し の下に置く", "同じく下へ（右下・左下・右上も書ける）"],
-    ["商品マスタのA1:C3を 見出し の下に1行あけて置く", "すきまを空ける（2列あけて、なども）"]
+    { ex: "売上明細のA1:C4を 抜粋1 のA1に置く（名前: 見出し）", ds: "置いたものに名前をつける",
+      demo: D("out", [[0, 0, 3, 3, "見出し", 0]], "この名前を、あとの行で目印にできます") },
+    { ex: "支店別サマリのA1:B4を 見出し の右に置く", ds: "名前を指した相手のとなりへ。直前が何でも迷わない",
+      demo: D("out", [[0, 0, 3, 3, "見出し", 0], [4, 0, 2, 3, "別のもの", 4], [0, 3, 3, 2, "右", 1]],
+        "間に何を置いたあとでも、<b>見出しの右</b>へ") },
+    { ex: "商品マスタのA1:C3を 見出し の下に置く", ds: "同じく下へ（右下・左下・右上も書ける）",
+      demo: D("out", [[0, 0, 3, 3, "見出し", 0], [3, 0, 2, 3, "下", 2]], "左をそろえて、すぐ下へ") },
+    { ex: "商品マスタのA1:C3を 見出し の下に1行あけて置く", ds: "すきまを空ける（2列あけて、なども）",
+      demo: D("out", [[0, 0, 3, 3, "見出し", 0], [4, 0, 2, 3, "下", 2]], "1 行ぶん空けて置かれます") }
   ]],
   ["繰り返し", [
-    ["繰り返し 行 = 10, 12, 17, 20", "値の数だけ繰り返す。次の行から「ここまで」まで"],
-    ["繰り返し 行 = 10-14", "10,11,12,13,14 に広がる"],
-    ["繰り返し 列 = B, D, F", "列でも繰り返せる（B-E の範囲も可）"],
-    ["繰り返し シート = 売上明細, 支店別サマリ", "シートでも繰り返せる"],
-    ["売上明細の{行}行目を続けて置く", "{行} が各値に置き換わる（{列}{シート}も同じ）"],
-    ["ここまで", "繰り返しの終わり"],
-    ["繰り返し 行 = 10, 12 / 横に並べる", "1 周ぶんを右へ足していく（既定は縦に積む）"],
-    ["繰り返し 行 = 10, 12 / 1列あけて横に並べる", "すきまを空けて並べる"]
+    { ex: "繰り返し 行 = 10, 12, 17, 20", ds: "値の数だけ繰り返す。次の行から「ここまで」まで",
+      demo: D("out", [[0, 0, 1, 6, "10", 0], [1, 0, 1, 6, "12", 1], [2, 0, 1, 6, "17", 2], [3, 0, 1, 6, "20", 3]],
+        "4 つの値ぶん、同じ処理が走ります") },
+    { ex: "繰り返し 行 = 10-14", ds: "10,11,12,13,14 に広がる",
+      demo: D("out", [[0, 0, 1, 6, "10", 0], [1, 0, 1, 6, "11", 1], [2, 0, 1, 6, "12", 2],
+        [3, 0, 1, 6, "13", 3], [4, 0, 1, 6, "14", 4]], "範囲で書くと、その数だけ広がります") },
+    { ex: "繰り返し 列 = B, D, F", ds: "列でも繰り返せる（B-E の範囲も可）",
+      demo: D("src", [[0, 1, 7, 1, "B", 1], [0, 3, 7, 1, "D", 2], [0, 5, 7, 1, "F", 3]],
+        "指した列を、順に取り出します") },
+    { ex: "繰り返し シート = 売上明細, 支店別サマリ", ds: "シートでも繰り返せる",
+      demo: D("out", [[0, 0, 2, 6, "売上明細", 0], [2, 0, 2, 6, "支店別サマリ", 1]],
+        "シートを変えながら、同じ処理を繰り返します") },
+    { ex: "売上明細の{行}行目を続けて置く", ds: "{行} が各値に置き換わる（{列}{シート}も同じ）",
+      demo: D("out", [[0, 0, 1, 6, "10行目", 0], [1, 0, 1, 6, "12行目", 1], [2, 0, 1, 6, "17行目", 2]],
+        "{行} のところが、毎周ちがう値になります") },
+    { ex: "ここまで", ds: "繰り返しの終わり",
+      demo: D("out", [[0, 0, 1, 6, "1周目", 0], [1, 0, 1, 6, "2周目", 1], [2, 0, 1, 6, "3周目", 2]],
+        "この行までが繰り返される中身です") },
+    { ex: "繰り返し 行 = 10, 12 / 横に並べる", ds: "1 周ぶんを右へ足していく（既定は縦に積む）",
+      demo: D("out", [[0, 0, 1, 3, "10", 0], [1, 0, 1, 3, "10", 1], [0, 3, 1, 3, "12", 0], [1, 3, 1, 3, "12", 1]],
+        "1 周ぶんのかたまりが、<b>右へ</b>足されます") },
+    { ex: "繰り返し 行 = 10, 12 / 1列あけて横に並べる", ds: "すきまを空けて並べる",
+      demo: D("out", [[0, 0, 1, 3, "10", 0], [1, 0, 1, 3, "10", 1], [0, 4, 1, 3, "12", 0], [1, 4, 1, 3, "12", 1]],
+        "周と周のあいだに 1 列すきまが入ります") }
   ]],
   ["シートとファイル", [
-    ["シート追加 月次まとめ", "出力シートを用意する。同じ名前があれば使い回す"],
-    ["[売上_2026.xlsx]売上明細のA1:C3を…", "同じ名前のシートが複数のファイルにあるとき、ファイルで選ぶ"]
+    { ex: "シート追加 月次まとめ", ds: "出力シートを用意する。同じ名前があれば使い回す",
+      demo: D("out", [[0, 0, 2, 5, "月次まとめ に置く", 0]], "同じ名前があれば使い回すので、何度実行しても増えません") },
+    { ex: "[売上_2026.xlsx]売上明細のA1:C3を…", ds: "同じ名前のシートが複数のファイルにあるとき、ファイルで選ぶ",
+      demo: D("src", [[0, 0, 3, 3, "このファイルの", 1]], "同じシート名があるときだけ必要です") }
   ]],
   ["その他", [
-    ["生成", "そこまでの結果を Excel として書き出す。手順書の最後に置ける"],
-    ["説明: 支店ごとの月次行を1枚にまとめる", "何をする手順書かのメモ（実行されない）"],
-    ["# 元ファイル: 売上_2026.xlsx", "# で始まる行はメモ。元ファイル名は実行時に照合される"]
+    { ex: "生成", ds: "そこまでの結果を Excel として書き出す。手順書の最後に置ける",
+      demo: D("out", [[0, 0, 2, 5, "置いたもの", 0], [2, 0, 2, 5, "置いたもの", 1], [0, 0, 4, 5, "→ 書き出す", 4]],
+        "そこまでに置いたものを、そのまま Excel にします") },
+    { ex: "説明: 支店ごとの月次行を1枚にまとめる", ds: "何をする手順書かのメモ（実行されない）",
+      demo: null },
+    { ex: "# 元ファイル: 売上_2026.xlsx", ds: "# で始まる行はメモ。元ファイル名は実行時に照合される",
+      demo: null }
   ]]
 ];
+
+/* --- 動きの見本（小さな表に、順番に置かれる様子を出す） --- */
+var MW = 30, MH = 15, MHW = 18, MHH = 13;
+var miniTimer = 0, miniNodes = [], miniAt = -1, miniLen = 0;
+
+function drawMini(cv, cols, rows, isSrc) {
+  var css = getComputedStyle(document.documentElement);
+  var w = MHW + MW * cols, h = MHH + MH * rows;
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = w * dpr; cv.height = h * dpr;
+  cv.style.aspectRatio = w + " / " + h;
+  var x = cv.getContext("2d");
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  var v = function (n) { return css.getPropertyValue(n).trim(); };
+  x.fillStyle = v("--surface"); x.fillRect(0, 0, w, h);
+  x.fillStyle = v("--panel"); x.fillRect(0, 0, w, MHH); x.fillRect(0, 0, MHW, h);
+  x.strokeStyle = v("--line-soft"); x.lineWidth = 1;
+  var i;
+  for (i = 0; i <= cols; i++) { x.beginPath(); x.moveTo(MHW + i * MW + .5, 0); x.lineTo(MHW + i * MW + .5, h); x.stroke(); }
+  for (i = 0; i <= rows; i++) { x.beginPath(); x.moveTo(0, MHH + i * MH + .5); x.lineTo(w, MHH + i * MH + .5); x.stroke(); }
+  x.strokeStyle = v("--line");
+  x.beginPath(); x.moveTo(0, MHH + .5); x.lineTo(w, MHH + .5); x.stroke();
+  x.beginPath(); x.moveTo(MHW + .5, 0); x.lineTo(MHW + .5, h); x.stroke();
+  x.strokeRect(.5, .5, w - 1, h - 1);
+  x.fillStyle = isSrc ? v("--src") : v("--dst");
+  x.font = "700 8px " + v("--font-mono");
+  x.textAlign = "center"; x.textBaseline = "middle";
+  for (i = 0; i < cols; i++) x.fillText(colName(i), MHW + i * MW + MW / 2, MHH / 2 + .5);
+  for (i = 0; i < rows; i++) x.fillText(String(i + 1), MHW / 2, MHH + i * MH + MH / 2 + .5);
+}
+
+function stopMini() { clearTimeout(miniTimer); miniTimer = 0; miniNodes = []; miniAt = -1; miniLen = 0; }
+
+function showCheatDemo(item) {
+  var host = $("cheatDemo"), note = $("cheatNote");
+  stopMini();
+  host.innerHTML = "";
+  if (!item) { note.innerHTML = "左の行にカーソルを合わせると、どう置かれるかが動きます"; return; }
+  if (!item.demo) {
+    note.innerHTML = "<b>" + esc2(item.ds) + "</b>";
+    return;
+  }
+  var d = item.demo;
+  var cv = el("canvas");
+  host.appendChild(cv);
+  drawMini(cv, d.cols, d.rows, d.k === "src");
+  var W = MHW + MW * d.cols, H = MHH + MH * d.rows;
+  miniNodes = d.st.map(function (b) {
+    var n = el("div", "mb");
+    n.style.cssText = "left:" + (100 * (MHW + b[1] * MW) / W) + "%;top:" + (100 * (MHH + b[0] * MH) / H)
+      + "%;width:" + (100 * (b[3] * MW) / W) + "%;height:" + (100 * (b[2] * MH) / H)
+      + "%;--bc:" + hueOf(b[5] || 0) + ";";
+    n.textContent = b[4] || "";
+    host.appendChild(n);
+    return n;
+  });
+  miniLen = miniNodes.length;
+  note.innerHTML = d.note + "（" + (d.k === "src" ? "元データ" : "出力シート") + "）";
+  miniAt = -1;
+  tickMini();
+}
+function tickMini() {
+  miniAt++;
+  if (miniAt > miniLen) { miniAt = -1; miniTimer = setTimeout(tickMini, 420); return; }
+  miniNodes.forEach(function (n, i) {
+    n.classList.toggle("in", i <= miniAt);
+    n.classList.toggle("now", i === miniAt);
+  });
+  miniTimer = setTimeout(tickMini, miniAt >= miniLen ? 1100 : 700);
+}
+/** 説明文を安全に埋める（一覧は自分で書いた文字列だけだが、念のため） */
+function esc2(t) { return String(t).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); }
+
 function renderCheat() {
   var box = $("cheatBody");
   if (box.childNodes.length) return;
   CHEAT.forEach(function (grp) {
     box.appendChild(el("h4", null, grp[0]));
-    grp[1].forEach(function (row) {
+    grp[1].forEach(function (item) {
       var b = el("button", "cheat-row");
       b.type = "button";
       b.title = "クリックで手順書に貼り付け";
-      var ex = el("span", "ex", row[0]);
-      var ds = el("span", "ds", row[1]);
-      b.appendChild(ex); b.appendChild(ds);
-      b.addEventListener("click", function () { insertLine(row[0]); });
+      b.appendChild(el("span", "ex", item.ex));
+      b.appendChild(el("span", "ds", item.ds));
+      b.addEventListener("click", function () { insertLine(item.ex); });
+      b.addEventListener("pointerenter", function () { showCheatDemo(item); });
+      b.addEventListener("focus", function () { showCheatDemo(item); });
       box.appendChild(b);
     });
   });
+  showCheatDemo(CHEAT[0][1][0]);
 }
 /** 手順書のカーソル位置に 1 行差し込む */
 function insertLine(line) {
@@ -3753,7 +3906,8 @@ $("scHelp").addEventListener("click", function () {
   renderCheat();
   box.hidden = !box.hidden;
   $("scHelp").textContent = box.hidden ? "書き方の一覧" : "一覧を閉じる";
-  if (!box.hidden) hideRepeatForm();
+  if (box.hidden) stopMini();
+  else hideRepeatForm();
 });
 
 $("scRepeat").addEventListener("click", function () { showRepeatForm(); });

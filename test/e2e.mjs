@@ -607,6 +607,51 @@ check("ひととおりの書き方が並ぶ",
   (await page.locator(".cheat-row").count()) >= 25,
   String(await page.locator(".cheat-row").count()));
 
+// 行にカーソルを合わせると、どう置かれるかが動きで出る
+const miniState = async () => await page.evaluate(() => ({
+  canvas: !!document.querySelector("#cheatDemo canvas"),
+  blocks: document.querySelectorAll("#cheatDemo .mb").length,
+  shown: document.querySelectorAll("#cheatDemo .mb.in").length,
+  note: document.getElementById("cheatNote").textContent,
+}));
+await page.hover('.cheat-row:has-text("右に続けて置く")');
+await page.waitForTimeout(1500);
+const mRight = await miniState();
+check("カーソルを合わせると見本が出る", mRight.canvas && mRight.blocks === 2, JSON.stringify(mRight));
+check("見本に一言の説明がつく",
+  /直前のすぐ右へ/.test(mRight.note) && /出力シート/.test(mRight.note), mRight.note);
+
+// 範囲の書き方は「元データ側」で見せる
+await page.hover('.cheat-row:has-text("B列からD列")');
+await page.waitForTimeout(600);
+const mCols = await miniState();
+check("範囲の書き方は元データ側で見せる",
+  mCols.canvas && /元データ/.test(mCols.note), JSON.stringify(mCols));
+
+// 名前で指す例は、間に別のものを置いても相手のとなりに来ることを見せる
+await page.hover('.cheat-row:has-text("見出し の右に置く")');
+await page.waitForTimeout(600);
+const mNamed = await miniState();
+check("名前で指す例は3つ出して違いを見せる", mNamed.blocks === 3, JSON.stringify(mNamed));
+
+// 動いていること（順に増えて、また最初から）
+await page.hover('.cheat-row:has-text("繰り返し 行 = 10-14")');
+await page.waitForTimeout(250);
+const miniSeen = new Set();
+for (let i = 0; i < 14; i++) {
+  miniSeen.add((await miniState()).shown);
+  await page.waitForTimeout(360);
+}
+check("見本は順に置かれていく（止まった絵ではない）", miniSeen.size >= 4,
+  [...miniSeen].sort((a, b) => a - b).join(","));
+
+// 動きのない行（メモなど）は説明だけ
+await page.hover('.cheat-row:has-text("説明: 支店ごとの月次行")');
+await page.waitForTimeout(400);
+const mNone = await miniState();
+check("実行されない行には見本を出さない",
+  !mNone.canvas && /実行されない/.test(mNone.note), JSON.stringify(mNone));
+
 // 行をクリックすると手順書に貼り付く
 await page.fill("#scText", "");
 await page.click('.cheat-row:has-text("シート追加 月次まとめ")');
@@ -653,6 +698,13 @@ await page.click("#scRepeat");
 await page.waitForTimeout(120);
 check("繰り返しの欄を開くと一覧は畳まれる",
   !(await page.isVisible("#scCheat")) && (await page.textContent("#scHelp")) === "書き方の一覧");
+// 畳んだら動きも止める（見えないところで動かし続けない）
+const stopped = await page.evaluate(() => new Promise((r) => {
+  const n = () => document.querySelectorAll("#cheatDemo .mb.in").length;
+  const a = n();
+  setTimeout(() => r(a === n()), 1000);
+}));
+check("畳むと見本の動きも止まる", stopped);
 await page.click("#repeatCancel");
 await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
 
