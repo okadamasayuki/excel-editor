@@ -570,61 +570,45 @@ body.stacked .pane-dst { grid-column: 2; grid-row: 2; border-left: 1px solid var
 .stat { color: var(--muted); font-family: var(--font-mono); }
 
 /* ============================================================
-   コンソール
+   手順書のパネル
    ============================================================ */
-.console {
-  border-top: 1px solid var(--line); background: var(--panel);
-  padding: 0 14px 10px;
+.modal {
+  position: fixed; inset: 0; z-index: 80;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: color-mix(in srgb, var(--ink) 34%, transparent);
 }
-.console-head {
-  display: flex; align-items: center; gap: 10px;
-  border-bottom: 1px solid var(--line-soft); margin: 0 -14px 8px; padding: 0 14px;
+.modal-panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg); width: min(960px, 100%); max-height: 100%;
+  display: flex; flex-direction: column; padding: 12px 16px 14px; gap: 8px;
 }
-.ctabs { display: flex; gap: 2px; }
-.ctab {
-  border: none; background: transparent; cursor: pointer; padding: 7px 12px;
-  font-size: 11.5px; font-weight: 600; color: var(--muted); position: relative;
-}
-.ctab:hover { color: var(--ink); }
-.ctab[aria-selected="true"] { color: var(--dst); }
-.ctab[aria-selected="true"]::after {
-  content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px;
-  background: var(--dst); border-radius: 2px 2px 0 0;
-}
-.console-body {
-  display: grid; grid-template-columns: minmax(0,1fr) minmax(180px, 250px); gap: 12px;
-  align-items: start;
-}
-.console .cmdrow { display: flex; align-items: center; gap: 8px; }
+.modal-head { display: flex; align-items: center; gap: 10px; }
+.modal-head .eyebrow { font-size: 12px; color: var(--dst); letter-spacing: .08em; }
 
-/* --- 手順書 --- */
-.rtoolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.rtoolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .rtoolbar .sep { width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
 textarea.script {
-  width: 100%; min-height: 150px; resize: vertical;
+  width: 100%; flex: 1 1 auto; min-height: 260px; resize: vertical;
   background: var(--surface); color: var(--ink);
   border: 1px solid var(--line); border-radius: var(--r-md);
-  padding: 9px 11px; font-family: var(--font-mono); font-size: 12px; line-height: 1.75;
+  padding: 10px 12px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.75;
   tab-size: 2;
 }
 textarea.script:focus { outline: none; border-color: var(--dst); box-shadow: 0 0 0 2px var(--dst-soft); }
 select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
-.console .prompt { color: var(--dst); font-family: var(--font-mono); font-weight: 700; flex: none; }
-.console input.cmd {
-  flex: 1 1 auto; background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--r-md); padding: 6px 10px; font-size: 12px; min-width: 0;
+
+/* 繰り返す行を尋ねる欄 */
+.repeat-form {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--src-soft); border: 1px solid var(--src-line);
+  border-radius: var(--r-md); padding: 8px 10px;
 }
-.console input.cmd:focus { outline: none; border-color: var(--dst); box-shadow: 0 0 0 2px var(--dst-soft); }
-.examples { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-.ex {
-  border: 1px dashed var(--line); background: transparent; color: var(--muted);
-  border-radius: 100px; padding: 2px 9px; font-size: 10.5px; cursor: pointer;
-  font-family: var(--font-mono);
-}
-.ex:hover { border-style: solid; color: var(--ink); border-color: var(--muted); }
+.repeat-form label { font-size: 12px; font-weight: 700; color: var(--src); }
+.repeat-form .inp { width: 200px; }
+
 .log {
   font-family: var(--font-mono); font-size: 10.5px; color: var(--muted);
-  max-height: 54px; overflow: auto; text-align: right; min-width: 200px; line-height: 1.6;
+  max-height: 76px; overflow: auto; line-height: 1.6; flex: none;
 }
 .log .ok { color: var(--ok); }
 .log .er { color: var(--bad); }
@@ -678,6 +662,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
     <div class="spacer"></div>
     <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xlsb,.xls,.csv" hidden>
     <button class="btn ghost" id="btnLayout" title="元データと出力シートの並べ方を切り替えます">⇅ 上下に並べる</button>
+    <button class="btn" id="btnScript" title="同じ作業を使い回す手順書を開きます">手順書</button>
     <button class="btn ghost" id="btnSample">サンプルで試す</button>
     <button class="btn" id="btnOpen">ファイルを開く</button>
     <button class="btn primary" id="btnGen" disabled>Excelを生成してダウンロード</button>
@@ -796,45 +781,44 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
     </section>
   </div>
 
-  <!-- ============ コンソール ============ -->
-  <div class="console">
-    <div class="console-head">
-      <div class="ctabs" role="tablist">
-        <button class="ctab" id="tabCmd" role="tab" aria-selected="true">1行指示</button>
-        <button class="ctab" id="tabScript" role="tab" aria-selected="false">手順書</button>
-      </div>
-      <span class="hint" id="consoleHint">日本語の文章で、範囲と置き場所を指示できます</span>
-      <div class="spacer"></div>
-      <span class="hint mono" id="recipeState"></span>
-    </div>
+</div>
 
-    <div class="console-body">
-      <div id="cmdMode">
-        <div class="cmdrow">
-          <span class="prompt">›</span>
-          <input class="cmd" id="cmdInput" placeholder="文章で指示する 例: 売上明細のA1からE12を抜粋1のB2に置く" aria-label="コマンド入力">
-          <button class="btn sm" id="cmdRun">実行</button>
-        </div>
-        <div class="examples" id="examples"></div>
+  <!-- ============ 手順書（右上のボタンから開く） ============ -->
+  <div class="modal" id="scriptModal" hidden role="dialog" aria-modal="true" aria-labelledby="scriptTitle">
+    <div class="modal-panel">
+      <div class="modal-head">
+        <span class="eyebrow" id="scriptTitle">手順書</span>
+        <span class="hint">同じ作業を使い回す。Ctrl+Enter で実行</span>
+        <div class="spacer"></div>
+        <span class="hint mono" id="recipeState"></span>
+        <button class="btn sm" id="scClose" aria-label="閉じる">閉じる</button>
       </div>
 
-      <div id="scriptMode" hidden>
-        <div class="rtoolbar">
-          <button class="btn sm primary" id="scRun">手順書を実行</button>
-          <button class="btn sm" id="scFromBlocks">今の配置から作る</button>
-          <button class="btn sm src-accent" id="scRepeat" title="指示行を「繰り返し」で包み、行番号を {行} に置き換えます">繰り返しにする</button>
-          <label class="chk"><input type="checkbox" id="scClear" checked> 実行前に出力を空にする</label>
-          <span class="sep"></span>
-          <input class="inp w-name" id="scName" placeholder="手順書の名前" aria-label="手順書の名前">
-          <button class="btn sm" id="scSave">保存</button>
-          <select class="inp" id="scList" aria-label="保存済みの手順書"></select>
-          <button class="btn sm" id="scDel">削除</button>
-          <span class="sep"></span>
-          <button class="btn sm" id="scExport">ファイルに書き出す</button>
-          <button class="btn sm" id="scImportBtn">ファイルから読む</button>
-          <input type="file" id="scImport" accept=".txt,.md,.json" hidden>
-        </div>
-        <textarea id="scText" class="script" spellcheck="false" placeholder="# 手順書の例（# で始まる行はメモ）
+      <div class="rtoolbar">
+        <button class="btn sm primary" id="scRun">手順書を実行</button>
+        <button class="btn sm" id="scFromBlocks">今の配置から作る</button>
+        <button class="btn sm src-accent" id="scRepeat" title="指示行を「繰り返し」で包みます">繰り返しにする</button>
+        <label class="chk"><input type="checkbox" id="scClear" checked> 実行前に出力を空にする</label>
+        <span class="sep"></span>
+        <input class="inp w-name" id="scName" placeholder="手順書の名前" aria-label="手順書の名前">
+        <button class="btn sm" id="scSave">保存</button>
+        <select class="inp" id="scList" aria-label="保存済みの手順書"></select>
+        <button class="btn sm" id="scDel">削除</button>
+        <span class="sep"></span>
+        <button class="btn sm" id="scExport">ファイルに書き出す</button>
+        <button class="btn sm" id="scImportBtn">ファイルから読む</button>
+        <input type="file" id="scImport" accept=".txt,.md,.json" hidden>
+      </div>
+
+      <div class="repeat-form" id="repeatForm" hidden>
+        <label for="repeatValues">どの行を繰り返しますか？</label>
+        <input class="inp" id="repeatValues" placeholder="10, 12, 17, 20">
+        <button class="btn sm primary" id="repeatOk">この行で繰り返す</button>
+        <button class="btn sm" id="repeatCancel">やめる</button>
+        <span class="hint">カンマ区切り。<span class="mono">10-14</span> のように範囲でも指定できます</span>
+      </div>
+
+      <textarea id="scText" class="script" spellcheck="false" placeholder="# 手順書の例（# で始まる行はメモ）
 説明: 毎月の売上レポートをつくる手順
 
 シート追加 月次レポート
@@ -844,12 +828,10 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
   売上明細の{行}行目を続けて置く
   支店別サマリの{行}行目を右に続けて置く
 ここまで"></textarea>
-      </div>
 
       <div class="log" id="log"></div>
     </div>
   </div>
-</div>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
@@ -1307,8 +1289,7 @@ function readWorkbook(data, name) {
 
   // 新しいブックは必ず左上から見せる（前のファイルのスクロール位置を引きずらない）
   $("srcGrid").scrollTop = 0; $("srcGrid").scrollLeft = 0;
-  renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList(); renderExamples();
-  var totalRows = S.sheets.reduce(function (a, s) { return a + s.usedRows; }, 0);
+  renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList();   var totalRows = S.sheets.reduce(function (a, s) { return a + s.usedRows; }, 0);
   log("読み込み: " + name + " (" + S.sheets.length + "シート / 計" + totalRows + "行)", "ok");
   toast(name + " を読み込みました（" + S.sheets.length + "シート）");
   return true;
@@ -2279,6 +2260,12 @@ function execLine(raw, ctx) {
   if (/^#/.test(t)) return { skip: true };
   if (/^(説明|メモ|備考|作成者|作成日|元ファイル)\s*[:：]/.test(t)) return { skip: true };
 
+  // 手順書の最後に書いておけば、実行してそのまま書き出せる
+  if (/^(?:生成|書き出し?|ダウンロード|generate|export)$/i.test(t)) {
+    ctx.generate = true;
+    return { ok: true, msg: "書き出し" };
+  }
+
   var m = /^(?:シート追加|新規シート|シートを追加|出力シート|add\s*sheet)\s+(.+)$/i.exec(t);
   if (m) {
     var os = useOrAddOutSheet(m[1].trim());
@@ -2372,40 +2359,6 @@ function execLine(raw, ctx) {
     ok: true, block: b,
     msg: S.sheets[sheetIdx].name + "!" + rangeLabel(b) + " → " + o.name + "!" + a1(b.dr, b.dc) + (trans ? "（転置）" : "")
   };
-}
-
-/* --- 1行指示（コンソール） --- */
-var cmdCtx = { last: null };
-
-function runCommand(raw) {
-  var t = toHalf(raw).trim();
-  if (!t) return;
-  if (/^(生成|出力して|書き出|ダウンロード|generate|export)/.test(t)) { generate(); return; }
-  if (/^(元に戻|undo)/i.test(t)) { undo(); return; }
-  if (/^(クリア|全消去|clear|リセット)/i.test(t)) {
-    snapshot();
-    S.out.forEach(function (o) { o.blocks = []; });
-    S.selBlock = null; cmdCtx.last = null; renderOut(); renderBlockList();
-    log("すべてのブロックを消去しました"); return;
-  }
-
-  var r = execLine(raw, cmdCtx);
-  if (r.skip) return;
-  if (r.err) {
-    log("解釈できません: " + r.err, "er");
-    toast(r.err + "（例: 売上明細のA1からE12を抜粋1のB2に置く）", "er");
-    return;
-  }
-  if (r.block) {
-    var b = r.block;
-    setSelection(b.r1, b.c1, b.r2, b.c2, b.sheet);
-    if (b.sheet !== S.active) { S.active = b.sheet; renderSheetList(); renderSrcTabs(); renderSrc(); }
-    revealSelection();
-  }
-  renderOut(); renderBlockList();
-  if (r.block) revealBlock(r.block);
-  log("解釈: " + r.msg, "ok");
-  toast(r.msg);
 }
 
 /* ============================================================
@@ -2513,8 +2466,9 @@ function runScript(text, clearFirst) {
   S.noSnap = false; S.batch = false;
   if (!S.out.length) addOutSheet("抜粋1", true);
   renderOut(); renderBlockList();
-  // 作り直したときは先頭から見せる
+  // 作り直したときは先頭から、書き足したときは最後に置いたところを見せる
   if (clearFirst) { $("dstGrid").scrollTop = 0; $("dstGrid").scrollLeft = 0; dstGrid.draw(); }
+  else if (ctx.last) revealBlock(ctx.last.b);
 
   errs.slice(0, 6).forEach(function (e) {
     log(e.n + "行目" + (e.loop ? "(" + e.loop + ")" : "") + ": " + e.msg + " — " + e.text, "er");
@@ -2526,6 +2480,7 @@ function runScript(text, clearFirst) {
     log("手順書を実行: " + applied + "件を配置", "ok");
     toast("手順書どおりに " + applied + "件を配置しました");
   }
+  if (ctx.generate && !errs.length) generate();
   return { applied: applied, errors: errs };
 }
 
@@ -2611,16 +2566,14 @@ function restoreSheetNames(s, store) {
 }
 
 /**
- * 指示行を「繰り返し」〜「ここまで」で包む。
+ * 「繰り返しにする」の対象行を決める。
  * 選択範囲があればその行、無ければ最後にまとまっている指示行が対象。
- * 対象行に共通する行番号は {行} に置き換えるので、値を足すだけで使い回せる。
  */
-function wrapAsRepeat() {
+function findRepeatTarget() {
   var ta = $("scText");
   var text = ta.value.replace(/\r\n?/g, "\n");
   var lines = text.split("\n");
   var from, to, i;
-
   if (ta.selectionStart !== ta.selectionEnd) {
     from = text.slice(0, ta.selectionStart).split("\n").length - 1;
     to = text.slice(0, ta.selectionEnd).split("\n").length - 1;
@@ -2632,46 +2585,78 @@ function wrapAsRepeat() {
     from = to;
     while (from > 0 && isInstructionLine(lines[from - 1])) from--;
   }
-  if (to < 0 || to < from) {
-    toast("繰り返しにする指示行がありません。先に「今の配置から作る」を押してください", "wa");
-    return null;
-  }
+  if (to < 0 || to < from) return null;
 
   var body = lines.slice(from, to + 1);
   var exist = /[{｛]([^}｝]+)[}｝]/.exec(body.join("\n"));
-  var varName = exist ? exist[1] : "行";
-  var values = "";
+  var store = {};
+  var srcs = body.map(function (l) { return protectSheetNames(splitInstruction(toHalf(l).trim()).src, store); });
+  return {
+    lines: lines, from: from, to: to, body: body,
+    varName: exist ? exist[1] : "行",
+    already: !!exist,                       // すでに {◯◯} を使っているか
+    detected: exist ? "" : (commonRowNumber(srcs) || "")
+  };
+}
 
-  if (!exist) {
-    var store = {};
-    var srcs = body.map(function (l) { return protectSheetNames(splitInstruction(toHalf(l).trim()).src, store); });
-    var n = commonRowNumber(srcs);
-    if (!n) {
-      toast("共通する行番号が見つかりませんでした。{行} を自分で書き入れてください", "wa");
-    } else {
-      values = n;
-      body = body.map(function (l) {
-        var st = {}, p = splitInstruction(l);
-        var src = protectSheetNames(p.src, st)
-          .replace(/\d+/g, function (m) { return m === n ? "{" + varName + "}" : m; });
-        return restoreSheetNames(src, st) + p.rest;
-      });
-    }
+/** 「どの行を繰り返すか」を尋ねる欄を出す */
+function showRepeatForm() {
+  var t = findRepeatTarget();
+  if (!t) {
+    toast("繰り返しにする指示行がありません。先に「今の配置から作る」を押してください", "wa");
+    return null;
+  }
+  $("repeatForm").hidden = false;
+  $("repeatValues").value = t.detected || "";
+  $("repeatValues").placeholder = t.already
+    ? "10, 12, 17, 20"
+    : (t.detected ? t.detected + ", 12, 17, 20" : "10, 12, 17, 20");
+  $("repeatValues").focus();
+  $("repeatValues").select();
+  var label = t.already
+    ? "{" + t.varName + "} をどの値で繰り返しますか？"
+    : (t.detected
+      ? t.detected + "行目のところを、どの行で繰り返しますか？"
+      : "どの行を繰り返しますか？（行番号が見つからないので {行} は自分で書いてください）");
+  $("repeatForm").querySelector("label").textContent = label;
+  return t;
+}
+function hideRepeatForm() { $("repeatForm").hidden = true; }
+
+/**
+ * 指示行を「繰り返し」〜「ここまで」で包む。
+ * 対象行に共通する行番号は {行} に置き換えるので、指定した行ぶんだけ繰り返される。
+ */
+function wrapAsRepeat(valuesText) {
+  var t = findRepeatTarget();
+  if (!t) {
+    toast("繰り返しにする指示行がありません。先に「今の配置から作る」を押してください", "wa");
+    return null;
+  }
+  var ta = $("scText");
+  var values = toHalf(valuesText == null ? t.detected : valuesText).trim();
+  var body = t.body;
+
+  if (!t.already && t.detected) {
+    var n = t.detected;
+    body = body.map(function (l) {
+      var st = {}, sp = splitInstruction(l);
+      var src = protectSheetNames(sp.src, st)
+        .replace(/\d+/g, function (m) { return m === n ? "{" + t.varName + "}" : m; });
+      return restoreSheetNames(src, st) + sp.rest;
+    });
   }
 
-  var head = "繰り返し " + varName + " = " + values;
+  var head = "繰り返し " + t.varName + " = " + values;
   var wrapped = [head].concat(body.map(function (l) { return "  " + l.trim(); }), ["ここまで"]);
-  ta.value = lines.slice(0, from).concat(wrapped, lines.slice(to + 1)).join("\n");
+  ta.value = t.lines.slice(0, t.from).concat(wrapped, t.lines.slice(t.to + 1)).join("\n");
+  hideRepeatForm();
 
-  // 値の欄をあらかじめ選んでおき、そのまま「10, 12, 17, 20」と打てるようにする
-  var pos = ta.value.indexOf(head) + head.length - String(values).length;
-  ta.focus();
-  ta.setSelectionRange(pos, pos + String(values).length);
-
-  var cnt = to - from + 1;
-  log(cnt + "行を繰り返しにしました" + (values ? "（" + varName + " = " + values + "）" : ""), "ok");
-  toast(cnt + "行を繰り返しにしました。続けて「, 12, 17, 20」のように値を足してください");
-  return { from: from, count: cnt, varName: varName, values: values };
+  var cnt = t.to - t.from + 1;
+  var n2 = parseValueList(values).length;
+  log(cnt + "行を " + (n2 || 0) + "回ぶんの繰り返しにしました（" + t.varName + " = " + values + "）", "ok");
+  toast(cnt + "行を、" + (n2 ? n2 + "回ぶん" : "") + "繰り返しにしました");
+  return { from: t.from, count: cnt, varName: t.varName, values: values };
 }
 
 /* --- 保存済みの手順書（このブラウザの中だけに保存される） --- */
@@ -2695,27 +2680,6 @@ function renderRecipeList() {
     sel.appendChild(op);
   });
   $("recipeState").textContent = names.length ? "保存済み " + names.length + "件" : "";
-}
-
-function renderExamples() {
-  var box = $("examples");
-  box.innerHTML = "";
-  var s0 = S.sheets[0] ? S.sheets[0].name : "Sheet1";
-  var s1 = S.sheets[1] ? S.sheets[1].name : s0;
-  var o0 = activeOut() ? activeOut().name : "抜粋1";
-  var ex = [
-    s0 + "のA1からE12を" + o0 + "のB2に置く",
-    s1 + "の2行目から6行目をA20に置く",
-    s1 + "の10行目を続けて置く",
-    s0 + "!B:D -> H2",
-    "シート追加 集計用",
-    "生成"
-  ];
-  ex.forEach(function (t) {
-    var b = el("button", "ex", t);
-    b.addEventListener("click", function () { $("cmdInput").value = t; $("cmdInput").focus(); });
-    box.appendChild(b);
-  });
 }
 
 /* ============================================================
@@ -3001,7 +2965,12 @@ document.addEventListener("keydown", function (e) {
     $("dstGrid").classList.remove("armed");
     $("dstHint").hidden = true; $("dstHint").textContent = "";
   }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !/input|textarea/i.test(e.target.tagName)) {
+  // 文字を打っている最中だけ、その欄の取り消しに譲る
+  // （チェックボックスなどにフォーカスがあるときは、こちらの取り消しを効かせる）
+  var t = e.target || {};
+  var typing = /textarea/i.test(t.tagName)
+    || (/input/i.test(t.tagName) && !/^(checkbox|radio|button|submit|reset|file)$/i.test(t.type || "text"));
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !typing) {
     e.preventDefault(); undo();
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && e.target === $("srcGrid")) {
@@ -3036,25 +3005,17 @@ $("inspTrans").addEventListener("change", function () {
 });
 $("inspDel").addEventListener("click", function () { if (S.selBlock) removeBlock(S.selBlock); });
 
-$("cmdRun").addEventListener("click", function () { runCommand($("cmdInput").value); $("cmdInput").value = ""; });
-$("cmdInput").addEventListener("keydown", function (e) {
-  if (e.key === "Enter") { runCommand(this.value); this.value = ""; }
-});
-
-/* --- 手順書パネル --- */
-function setConsoleMode(mode) {
-  var isScript = mode === "script";
-  $("tabCmd").setAttribute("aria-selected", String(!isScript));
-  $("tabScript").setAttribute("aria-selected", String(isScript));
-  $("cmdMode").hidden = isScript;
-  $("scriptMode").hidden = !isScript;
-  $("consoleHint").textContent = isScript
-    ? "同じ作業を使い回す手順書。Ctrl+Enter で実行"
-    : "日本語の文章で、範囲と置き場所を指示できます";
-  if (isScript) $("scText").focus();
+/* --- 手順書パネルの開閉 --- */
+function openScript(open) {
+  $("scriptModal").hidden = !open;
+  if (open) { renderRecipeList(); $("scText").focus(); }
+  else hideRepeatForm();
 }
-$("tabCmd").addEventListener("click", function () { setConsoleMode("cmd"); });
-$("tabScript").addEventListener("click", function () { setConsoleMode("script"); });
+$("btnScript").addEventListener("click", function () { openScript(true); });
+$("scClose").addEventListener("click", function () { openScript(false); });
+$("scriptModal").addEventListener("pointerdown", function (e) {
+  if (e.target === $("scriptModal")) openScript(false);   // 外側を押したら閉じる
+});
 
 $("scRun").addEventListener("click", function () { runScript($("scText").value, $("scClear").checked); });
 $("scText").addEventListener("keydown", function (e) {
@@ -3073,7 +3034,17 @@ $("scFromBlocks").addEventListener("click", function () {
   toast("手順書を作りました。説明を書き足して保存できます");
 });
 
-$("scRepeat").addEventListener("click", wrapAsRepeat);
+$("scRepeat").addEventListener("click", showRepeatForm);
+$("repeatOk").addEventListener("click", function () {
+  var v = toHalf($("repeatValues").value).trim();
+  if (!v) { toast("繰り返す行を入れてください（例: 10, 12, 17, 20）", "wa"); $("repeatValues").focus(); return; }
+  wrapAsRepeat(v);
+});
+$("repeatValues").addEventListener("keydown", function (e) {
+  if (e.key === "Enter") { e.preventDefault(); $("repeatOk").click(); }
+  if (e.key === "Escape") { e.preventDefault(); hideRepeatForm(); }
+});
+$("repeatCancel").addEventListener("click", hideRepeatForm);
 
 $("scSave").addEventListener("click", function () {
   var name = $("scName").value.trim();
@@ -3127,7 +3098,7 @@ $("scImport").addEventListener("change", function (e) {
   fr.onload = function () {
     $("scText").value = String(fr.result);
     $("scName").value = f.name.replace(/\.[^.]+$/, "");
-    setConsoleMode("script");
+    openScript(true);
     log("手順書「" + f.name + "」を読み込みました", "ok");
     toast(f.name + " を読み込みました");
   };
@@ -3163,7 +3134,6 @@ addOutSheet("抜粋1", true);
 renderOutTabs();
 dstGrid.setSize(40, 24);
 dstGrid.refresh();
-renderExamples();
 renderBlockList();
 renderRecipeList();
 (function applyPrefs() {
@@ -3177,11 +3147,11 @@ log("Excelを読み込むと解析を開始します");
 
 /* テスト用フック */
 window.__app = {
-  S: S, runCommand: runCommand, loadSample: loadSample, buildWorkbook: buildWorkbook,
+  S: S, loadSample: loadSample, buildWorkbook: buildWorkbook,
   setSelection: setSelection, addBlock: addBlock, generate: generate, parseRangeText: parseRangeText,
   execLine: execLine, expandScript: expandScript, runScript: runScript,
   scriptFromBlocks: scriptFromBlocks, parseValueList: parseValueList,
-  wrapAsRepeat: wrapAsRepeat, commonRowNumber: commonRowNumber,
+  wrapAsRepeat: wrapAsRepeat, commonRowNumber: commonRowNumber, openScript: openScript,
   loadFile: loadFile, showLoading: showLoading, setStage: setStage,
   parseCell: parseCell, setMaxSrc: setMaxSrc, openHeaderMenu: openHeaderMenu,
   revealSelection: revealSelection,

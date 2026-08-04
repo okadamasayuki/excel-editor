@@ -186,8 +186,7 @@ blocks = await page.$$eval("#blockList .block-card .src", (ns) => ns.map((n) => 
 check("クリック配置でブロックが2件になる", blocks.length === 2, blocks.join(" / "));
 
 // ---- 5. 文章コマンド ----------------------------------------------------
-await page.fill("#cmdInput", "支店別サマリの2行目から7行目を抜粋1のF3に置く");
-await page.press("#cmdInput", "Enter");
+await page.evaluate(() => window.__app.runScript("支店別サマリの2行目から7行目を抜粋1のF3に置く", false));
 blocks = await page.$$eval("#blockList .block-card .src", (ns) => ns.map((n) => n.textContent));
 check("文章コマンドで3件目が追加される", blocks.length === 3, blocks.join(" / "));
 check("コマンドの範囲解釈が正しい", blocks[2] === "支店別サマリ!A2:C7", blocks[2]);
@@ -195,8 +194,7 @@ dest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) 
 check("コマンドの配置先が F3", dest[2] === "抜粋1!F3", dest[2]);
 
 // シート追加コマンド
-await page.fill("#cmdInput", "シート追加 集計用");
-await page.press("#cmdInput", "Enter");
+await page.evaluate(() => window.__app.runScript("シート追加 集計用", false));
 check("シート追加コマンドが効く", (await page.$$eval("#dstTabsHost .tab", (ns) => ns.length)) === 2);
 
 // 新しい出力シートへ、シート一覧からシートまるごとドラッグ
@@ -308,8 +306,9 @@ check("JSエラーが出ていない", errors.length === 0, errors.slice(0, 3).j
 
 // ---- 9. 手順書（同じ処理の使い回し / 引き継ぎ） -------------------------
 page.on("dialog", (d) => d.accept());   // 上書き確認などは通す
-await page.click("#tabScript");
-check("手順書タブに切り替わる", await page.isVisible("#scText"));
+await page.click("#btnScript");
+check("右上のボタンで手順書が開く", await page.isVisible("#scText"));
+check("1行指示の入力欄は無くなった", (await page.locator("#cmdInput").count()) === 0);
 
 // 今の配置から手順書を自動生成できる
 await page.click("#scFromBlocks");
@@ -345,6 +344,7 @@ check("{行} が値に置き換わる", rBlocks[0] === "売上明細!A10:E10" &&
   rBlocks[0] + " / " + rBlocks[4]);
 
 // 出力の中身を確認（12行目 = 4周目の1行目 = 売上明細の20行目）
+await page.click("#scClose");                       // 手順書を閉じてから書き出す
 const [dl2] = await Promise.all([page.waitForEvent("download"), page.click("#btnGen")]);
 const out2 = join(tmp, "recipe.xlsx");
 await dl2.saveAs(out2);
@@ -356,6 +356,7 @@ check("1行目に売上明細の10行目が入る", ws3 && ws3["B1"] && typeof w
 check("10行分が縦に並ぶ", ws3 && ws3["!ref"] === "A1:E12", ws3 && ws3["!ref"]);
 
 // 「下に続ける」と「右に続ける」を混ぜても、周の先頭は左端に戻る（階段状にならない）
+await page.click("#btnScript");                     // 手順書を開き直す
 await page.fill("#scText", `シート追加 横並び
 売上明細のA2からE2を横並びのA1に置く
 繰り返し 行 = 10, 12, 17
@@ -370,6 +371,7 @@ check("下に続けると行の左端に戻る",
   zig.join(","));
 
 // 薄いブロックを積んでも中身が読めるよう、ラベルは選択中/ホバー中だけ
+await page.click("#scClose");                       // 本体をさわるので手順書を閉じる
 const tagsShown = await page.$$eval("#dstGrid .blockbox .tag",
   (ns) => ns.filter((n) => getComputedStyle(n).visibility === "visible").length);
 check("ブロックのラベルは既定で隠れている", tagsShown <= 1, `${tagsShown}件が表示中`);
@@ -385,26 +387,29 @@ await page.evaluate(() => {
 売上明細の10行目をまとめのA1に置く
 支店別サマリの10行目を右に続けて置く`, true);
 });
+await page.click("#btnScript");                     // 手順書を開き直す
 await page.click("#scFromBlocks");
 await page.click("#scRepeat");
+// どの行を繰り返すか尋ねる欄が出る
+check("繰り返しにすると入力欄が出る", await page.isVisible("#repeatForm"));
+check("見つけた行番号が入っている", (await page.inputValue("#repeatValues")) === "10",
+  await page.inputValue("#repeatValues"));
+check("何をするのか文章で示す",
+  /10行目のところを、どの行で繰り返しますか/.test(await page.textContent("#repeatForm label")),
+  await page.textContent("#repeatForm label"));
+// 繰り返す行を入れて決定
+await page.fill("#repeatValues", "10, 12, 17, 20");
+await page.click("#repeatOk");
+check("決定すると入力欄は閉じる", !(await page.isVisible("#repeatForm")));
 const wrapped = await page.inputValue("#scText");
 check("繰り返しにするで包まれる",
-  /繰り返し 行 = 10\n {2}売上明細のA\{行\}:E\{行\}をまとめのA1に置く\n {2}支店別サマリのA\{行\}:C\{行\}をまとめのF1に置く\nここまで/.test(wrapped),
+  /繰り返し 行 = 10, 12, 17, 20\n {2}売上明細のA\{行\}:E\{行\}をまとめのA1に置く\n {2}支店別サマリのA\{行\}:C\{行\}をまとめのF1に置く\nここまで/.test(wrapped),
   wrapped.split("\n").filter((l) => /繰り返し|\{行\}|ここまで/.test(l)).join(" / "));
 check("シート追加は繰り返しの外に残る",
   /シート追加 まとめ\n繰り返し/.test(wrapped),
   wrapped.split("\n").filter((l) => /シート追加/.test(l)).join(","));
-check("値の欄が選択された状態になる",
-  await page.evaluate(() => {
-    const ta = document.getElementById("scText");
-    return ta.value.slice(ta.selectionStart, ta.selectionEnd);
-  }) === "10");
-
-// 選択部分に値を足してそのまま実行できる
-await page.evaluate(() => {
-  const ta = document.getElementById("scText");
-  ta.value = ta.value.replace("繰り返し 行 = 10", "繰り返し 行 = 10, 12, 17, 20");
-});
+check("入れた行が繰り返しの値になる", /繰り返し 行 = 10, 12, 17, 20/.test(wrapped),
+  wrapped.split("\n").filter((l) => /繰り返し/.test(l)).join(","));
 await page.click("#scRun");
 await page.waitForTimeout(200);
 const wrapDest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
@@ -449,6 +454,8 @@ await page.click("#scRun");
 await page.waitForTimeout(150);
 check("無いシートは行番号つきで報告される",
   /1行目.*見つかりません/.test(await page.textContent("#log")), (await page.textContent("#log")).slice(0, 60));
+
+await page.click("#scClose");                       // ここから先は本体画面をさわる
 
 // ---- 9c. 読み込み中の表示 ------------------------------------------------
 // 大きめのブックを作って、読み込み中に状態が出ることを確かめる
@@ -772,9 +779,7 @@ check("移動先は画面の真ん中あたりに来る", moved.offset < moved.v
 check("移動先は末尾の下 A61", (await page.evaluate(() => window.__app.S.lastGoto)) === "A61", await page.evaluate(() => window.__app.S.lastGoto));
 
 // 文章で指示したときは、置いたブロックまで表示が動いて光る
-await page.click("#tabCmd");     // 手順書タブから1行指示に戻す
-await page.fill("#cmdInput", "書式つきのA2:F2を遠いのA80に置く");
-await page.press("#cmdInput", "Enter");
+await page.evaluate(() => window.__app.runScript("書式つきのA2:F2を遠いのA80に置く", false));
 await page.waitForTimeout(200);
 check("文章で置いたときも表示が追いかける",
   (await page.evaluate(() => document.getElementById("dstGrid").scrollTop)) > 1200,
