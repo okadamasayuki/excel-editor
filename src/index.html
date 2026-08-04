@@ -391,6 +391,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .blockbox .tag .kill:hover { background: rgba(0,0,0,.34); }
 .blockbox.overlap { border-style: dashed; border-color: var(--bad); }
+/* 置いた直後に少しだけ光らせて、どこに入ったか分かるようにする */
+.blockbox.flash { animation: blockflash 1.1s ease-out 1; }
+@keyframes blockflash {
+  0%   { box-shadow: 0 0 0 3px var(--bc, var(--dst)); background: color-mix(in srgb, var(--bc, var(--dst)) 34%, transparent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .blockbox.flash { animation: none; } }
 
 /* ドロップ中のゴースト */
 .dropghost {
@@ -578,8 +585,10 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
   .filechip { max-width: 100%; }
   .panes { grid-template-columns: 1fr; }
   .pane + .pane { border-left: none; border-top: 1px solid var(--line); }
-  .pane { min-height: 340px; }
-  .gridwrap { min-height: 260px; }
+  /* 高さを決めておかないと、グリッドが行数ぶん伸びてページが際限なく長くなる */
+  .pane { min-height: 0; }
+  .gridwrap { height: 58vh; min-height: 240px; max-height: 58vh; }
+  .dropzone { min-height: 340px; }
   .console { grid-template-columns: 1fr; }
   .log { text-align: left; }
 }
@@ -1682,6 +1691,7 @@ function renderOutOverlay(cont) {
     if (b.trans) { var t = h; h = w; w = t; }
     var box = dstGrid.box({ r1: b.dr, c1: b.dc, r2: b.dr + h - 1, c2: b.dc + w - 1 });
     var n = el("div", "blockbox" + (S.selBlock === b.id ? " sel" : "") + (cont.overlap[bi] ? " overlap" : ""));
+    n.dataset.id = b.id;
     n.style.cssText = "left:" + box.left + "px;top:" + box.top + "px;width:" + box.width + "px;height:" + box.height + "px;--bc:" + blockColor(b) + ";";
     var tag = el("div", "tag");
     tag.draggable = true;
@@ -1702,6 +1712,21 @@ function renderOutOverlay(cont) {
     n.appendChild(tag);
     ovl.appendChild(n);
   });
+}
+
+/**
+ * 置いたブロックのところまで出力側の表示を動かし、少しの間だけ光らせる。
+ * 画面の外に置かれると「押したのに何も起きていない」ように見えるため。
+ */
+function revealBlock(b) {
+  if (!b) return;
+  var s = rangeSize(b);
+  var h = b.trans ? s.w : s.h, w = b.trans ? s.h : s.w;
+  dstGrid.scrollToCell(b.dr + h - 1, b.dc + w - 1);   // まず右下を見せて
+  dstGrid.scrollToCell(b.dr, b.dc);                    // 左上が確実に入るようにする
+  dstGrid.draw();
+  var n = dstGrid.overlay.querySelector('.blockbox[data-id="' + b.id + '"]');
+  if (n) { n.classList.remove("flash"); void n.offsetWidth; n.classList.add("flash"); }
 }
 
 function selectBlock(id) {
@@ -1916,6 +1941,7 @@ function dropPayload(p, r, c) {
     }
     S.selBlock = f.b.id;
     renderOut(); renderBlockList();
+    revealBlock(f.b);
     log("移動: " + rangeLabel(f.b) + " → " + a1(r, c), "ok");
     return;
   }
@@ -2125,6 +2151,7 @@ function runCommand(raw) {
     if (b.sheet !== S.active) { S.active = b.sheet; renderSheetList(); renderSrcTabs(); renderSrc(); }
   }
   renderOut(); renderBlockList();
+  if (r.block) revealBlock(r.block);
   log("解釈: " + r.msg, "ok");
   toast(r.msg);
 }
@@ -2234,6 +2261,8 @@ function runScript(text, clearFirst) {
   S.noSnap = false; S.batch = false;
   if (!S.out.length) addOutSheet("抜粋1", true);
   renderOut(); renderBlockList();
+  // 作り直したときは先頭から見せる
+  if (clearFirst) { $("dstGrid").scrollTop = 0; $("dstGrid").scrollLeft = 0; dstGrid.draw(); }
 
   errs.slice(0, 6).forEach(function (e) {
     log(e.n + "行目" + (e.loop ? "(" + e.loop + ")" : "") + ": " + e.msg + " — " + e.text, "er");
@@ -2626,6 +2655,7 @@ function placeAppend(dir) {
   var at = appendAnchor(o, dir);
   var b = addBlock({ sheet: S.sel.sheet, r1: S.sel.r1, c1: S.sel.c1, r2: S.sel.r2, c2: S.sel.c2 }, at.r, at.c, o);
   clearGhost();
+  revealBlock(b);
   log("配置: " + S.sheets[b.sheet].name + "!" + rangeLabel(b) + " → " + o.name + "!" + a1(b.dr, b.dc), "ok");
   toast((dir === "right" ? "末尾の右" : "末尾の下") + "に置きました（" + a1(b.dr, b.dc) + "）");
 }

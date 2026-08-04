@@ -165,6 +165,12 @@ await page.press("#cmdInput", "Enter");
 check("シート追加コマンドが効く", (await page.$$eval("#dstTabsHost .tab", (ns) => ns.length)) === 2);
 
 // 新しい出力シートへ、シート一覧からシートまるごとドラッグ
+// （直前のコマンド配置で出力側がその位置まで動いているので、先頭に戻してから掴む）
+await page.evaluate(() => {
+  const w = document.getElementById("dstGrid");
+  w.scrollTop = 0; w.scrollLeft = 0;
+});
+await page.waitForTimeout(80);
 const sheetItem = await page.locator('#sheetList .sheet-item:has-text("商品マスタ")').boundingBox();
 const dstCell3 = await page.locator('#dstGrid .gc[data-r="1"][data-c="1"]').boundingBox();
 await page.mouse.move(sheetItem.x + 12, sheetItem.y + 10);
@@ -250,7 +256,18 @@ await page.setViewportSize({ width: 420, height: 860 });
 await page.waitForTimeout(250);
 const overflowNarrow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 check("狭い画面でも横スクロールしない", overflowNarrow <= 1, `overflow=${overflowNarrow}px`);
+// 狭い画面でも、グリッドは自分の中でスクロールすること
+// （高さを持たないと行数ぶん伸びて、ページが際限なく長くなる）
+const narrowGrid = await page.evaluate(() => {
+  const w = document.getElementById("srcGrid");
+  return { clientH: w.clientHeight, scrollH: w.scrollHeight };
+});
+check("狭い画面でもグリッドの高さが抑えられる",
+  narrowGrid.clientH < 700 && narrowGrid.clientH < narrowGrid.scrollH,
+  `clientH=${narrowGrid.clientH} scrollH=${narrowGrid.scrollH}`);
 await page.screenshot({ path: join(root, "test/shots/narrow.png"), fullPage: false });
+await page.setViewportSize({ width: 1440, height: 900 });   // 以降は通常の画面で検証する
+await page.waitForTimeout(150);
 
 check("JSエラーが出ていない", errors.length === 0, errors.slice(0, 3).join(" | "));
 
@@ -553,15 +570,39 @@ await page.click("#btnAppendDown");
 const appended = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
 check("末尾の下は次の行、末尾の右は横に並ぶ",
   appended.join(",") === "抜粋1!A1,抜粋1!G1,抜粋1!A2", appended.join(","));
+// 画面の外に置かれる場合は、そこまで表示が移動する
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript("シート追加 遠い\n書式つきのA2:F2を遠いのA60に置く", true);
+  document.getElementById("dstGrid").scrollTop = 0;
+});
+await page.fill("#refFrom", "A5");
+await page.fill("#refTo", "F5");
+await page.click("#btnApplyRef");
+await page.click("#btnAppendDown");
+await page.waitForTimeout(150);
+const reveal = await page.evaluate(() => {
+  const w = document.getElementById("dstGrid");
+  const box = w.querySelector(".blockbox:last-child").getBoundingClientRect();
+  const view = w.getBoundingClientRect();
+  return { scrollTop: w.scrollTop, inView: box.top >= view.top - 1 && box.bottom <= view.bottom + 1 };
+});
+check("画面外に置いたらそこまで表示が動く", reveal.scrollTop > 200, `scrollTop=${Math.round(reveal.scrollTop)}`);
+check("置いたブロックが画面内に入る", reveal.inView, JSON.stringify(reveal));
+check("置いた直後は光って知らせる",
+  (await page.locator("#dstGrid .blockbox.flash").count()) === 1);
+
 // 押す前にどこへ置かれるか見える
 await page.fill("#refFrom", "A6");
 await page.fill("#refTo", "F6");
 await page.click("#btnApplyRef");
 await page.hover("#btnAppendRight");
 check("押す前に置き場所が出力側に見える", (await page.locator("#dstGrid .dropghost").count()) === 1);
-// 「末尾の右」＝直前に置いたブロックの右隣（手順書の「右に続けて置く」と同じ基準）
+// 「末尾の右」＝直前に置いたブロックの右隣（手順書の「右に続けて置く」と同じ基準）。
+// 直前に A61 へ置いたので、その右隣の G61 が出る
 check("見えている置き場所が末尾の右",
-  /^G2 へ 1×6/.test(await page.textContent("#dstGrid .dropghost .lbl")),
+  /^G61 へ 1×6/.test(await page.textContent("#dstGrid .dropghost .lbl")),
   await page.textContent("#dstGrid .dropghost .lbl"));
 await page.hover("#btnSelAll");
 check("離すと消える", (await page.locator("#dstGrid .dropghost").count()) === 0);
