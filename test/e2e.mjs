@@ -122,8 +122,9 @@ check("出力グリッドに値が流し込まれる（5×4=20セル）",
   (await page.$$eval("#dstGrid .gc", (ns) => ns.filter((n) => n.textContent.trim()).length)) === 20);
 
 // ---- 3b. 端まで引っ張ると自動スクロールして隠れた行・列が出る ------------
+// 選択の中から始めると「出力へ運ぶドラッグ」になるので、選択の外から始める
 const gridBox = await page.locator("#srcGrid").boundingBox();
-const startCell = await cellBox(gc(2, 0));
+const startCell = await cellBox(gc(9, 0));
 await page.mouse.move(startCell.x + 5, startCell.y + 5);
 await page.mouse.down();
 // 右端で保持 → 見えていない列の方向へ送られ続ける
@@ -632,18 +633,56 @@ await page.waitForTimeout(200);
 check("Escで元の3画面に戻る",
   (await page.isVisible("#dstGrid")) && (await page.textContent("#btnMaxSrc")) === "⤢ 全画面");
 
-// ---- 9e. 出力の末尾の下／右へ続けて置く ---------------------------------
+// ---- 9e. 末尾へ移動（置かずに表示だけ動かす） ---------------------------
 await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
 await selectRange("A2", "F2");
 await page.click("#btnAppendDown");
+check("移動ボタンでは置かれない（ブロックは増えない）",
+  (await page.locator("#blockList .block-card").count()) === 0,
+  String(await page.locator("#blockList .block-card").count()));
+check("移動先に目印が残る", (await page.locator("#dstGrid .dropghost").count()) === 1);
+check("空のときの移動先は A1",
+  /^A1 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
+  await page.textContent("#dstGrid .dropghost .lbl"));
+
+// 目印のところへドラッグして置く（選択範囲は掴んだままなので、そのまま運べる）
+let ghostBox = await page.locator("#dstGrid .dropghost").boundingBox();
+let selBox = await page.locator("#srcGrid .selbox").boundingBox();
+await page.mouse.move(selBox.x + selBox.width / 2, selBox.y + selBox.height / 2);
+await page.mouse.down();
+await page.mouse.move(ghostBox.x + 20, ghostBox.y + 10, { steps: 12 });
+await page.mouse.move(ghostBox.x + 22, ghostBox.y + 12, { steps: 3 });
+await page.mouse.up();
+check("選択範囲の中を掴んでドラッグできる",
+  (await page.locator("#blockList .block-card").count()) === 1,
+  String(await page.locator("#blockList .block-card").count()));
+check("目印の位置に置かれる",
+  (await page.textContent("#blockList .block-card .row2 .to")) === "抜粋1!A1",
+  await page.textContent("#blockList .block-card .row2 .to"));
+check("置いたら目印は消える", (await page.locator("#dstGrid .dropghost").count()) === 0);
+
+// 末尾の右へ移動 → その位置へドラッグ
 await selectRange("A3", "F3");
 await page.click("#btnAppendRight");
-await selectRange("A5", "F5");
-await page.click("#btnAppendDown");
+check("末尾の右は直前のブロックの右隣",
+  /^G1 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
+  await page.textContent("#dstGrid .dropghost .lbl"));
+ghostBox = await page.locator("#dstGrid .dropghost").boundingBox();
+selBox = await page.locator("#srcGrid .selbox").boundingBox();
+await page.mouse.move(selBox.x + selBox.width / 2, selBox.y + selBox.height / 2);
+await page.mouse.down();
+await page.mouse.move(ghostBox.x + 20, ghostBox.y + 10, { steps: 12 });
+await page.mouse.move(ghostBox.x + 22, ghostBox.y + 12, { steps: 3 });
+await page.mouse.up();
 const appended = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
-check("末尾の下は次の行、末尾の右は横に並ぶ",
-  appended.join(",") === "抜粋1!A1,抜粋1!G1,抜粋1!A2", appended.join(","));
-// 画面の外に置かれる場合は、そこまで表示が移動する
+check("末尾の下・右に並べられる", appended.join(",") === "抜粋1!A1,抜粋1!G1", appended.join(","));
+
+// 選択の中をクリックだけしたら、そのセルへ畳む（Excel と同じ）
+const selBox2 = await page.locator("#srcGrid .selbox").boundingBox();
+await page.mouse.click(selBox2.x + 10, selBox2.y + 10);
+const collapsed = await page.textContent("#selInfo");
+check("選択の中をクリックすると1セルになる", /A3:A3|A3\b/.test(collapsed) && /1×1/.test(collapsed), collapsed);
+// 移動先が画面の外なら、そこまで出力側の表示が動く
 await page.evaluate(() => {
   const A = window.__app;
   A.S.out = []; A.S.selBlock = null;
@@ -653,28 +692,28 @@ await page.evaluate(() => {
 await selectRange("A5", "F5");
 await page.click("#btnAppendDown");
 await page.waitForTimeout(150);
-const reveal = await page.evaluate(() => {
+const moved = await page.evaluate(() => {
   const w = document.getElementById("dstGrid");
-  const box = w.querySelector(".blockbox:last-child").getBoundingClientRect();
+  const g = w.querySelector(".dropghost").getBoundingClientRect();
   const view = w.getBoundingClientRect();
-  return { scrollTop: w.scrollTop, inView: box.top >= view.top - 1 && box.bottom <= view.bottom + 1 };
+  return { scrollTop: w.scrollTop, inView: g.top >= view.top - 1 && g.bottom <= view.bottom + 1 };
 });
-check("画面外に置いたらそこまで表示が動く", reveal.scrollTop > 200, `scrollTop=${Math.round(reveal.scrollTop)}`);
-check("置いたブロックが画面内に入る", reveal.inView, JSON.stringify(reveal));
+check("移動先が画面外ならそこまで表示が動く", moved.scrollTop > 200, `scrollTop=${Math.round(moved.scrollTop)}`);
+check("移動先の目印が画面内に入る", moved.inView, JSON.stringify(moved));
+check("移動先は末尾の下 A61",
+  /^A61 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
+  await page.textContent("#dstGrid .dropghost .lbl"));
+
+// 文章で指示したときは、置いたブロックまで表示が動いて光る
+await page.click("#tabCmd");     // 手順書タブから1行指示に戻す
+await page.fill("#cmdInput", "書式つきのA2:F2を遠いのA80に置く");
+await page.press("#cmdInput", "Enter");
+await page.waitForTimeout(200);
+check("文章で置いたときも表示が追いかける",
+  (await page.evaluate(() => document.getElementById("dstGrid").scrollTop)) > 1200,
+  String(Math.round(await page.evaluate(() => document.getElementById("dstGrid").scrollTop))));
 check("置いた直後は光って知らせる",
   (await page.locator("#dstGrid .blockbox.flash").count()) === 1);
-
-// 押す前にどこへ置かれるか見える
-await selectRange("A6", "F6");
-await page.hover("#btnAppendRight");
-check("押す前に置き場所が出力側に見える", (await page.locator("#dstGrid .dropghost").count()) === 1);
-// 「末尾の右」＝直前に置いたブロックの右隣（手順書の「右に続けて置く」と同じ基準）。
-// 直前に A61 へ置いたので、その右隣の G61 が出る
-check("見えている置き場所が末尾の右",
-  /^G61 へ 1×6/.test(await page.textContent("#dstGrid .dropghost .lbl")),
-  await page.textContent("#dstGrid .dropghost .lbl"));
-await page.hover("#btnSelAll");
-check("離すと消える", (await page.locator("#dstGrid .dropghost").count()) === 0);
 
 // あとの検証のためサンプルに戻す
 await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });

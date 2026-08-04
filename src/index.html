@@ -348,6 +348,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
   box-shadow: 0 0 0 1px rgba(255,255,255,.35) inset;
 }
 .selbox.ghost { background: transparent; border-style: dashed; opacity: .8; }
+/* 選択した範囲そのものを掴んで運べるようにする */
+.selbox[draggable="true"] { pointer-events: auto; cursor: grab; }
+.selbox[draggable="true"]:active { cursor: grabbing; }
 .selbox .grab {
   position: absolute; top: -11px; left: -1.5px;
   display: flex; align-items: center; gap: 4px;
@@ -719,8 +722,8 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
           <label for="outName">シート名</label>
           <input class="inp w-name" id="outName" value="抜粋1">
         </div>
-        <button class="btn sm" id="btnAppendDown" disabled title="出力の末尾の下に、選択範囲をそのまま続けます">↓ 末尾の下へ</button>
-        <button class="btn sm" id="btnAppendRight" disabled title="出力の末尾の右に、選択範囲を横に並べます">→ 末尾の右へ</button>
+        <button class="btn sm" id="btnAppendDown" title="出力の末尾の下まで表示を動かします（置きません）">↓ 末尾の下へ移動</button>
+        <button class="btn sm" id="btnAppendRight" title="出力の末尾の右まで表示を動かします（置きません）">→ 末尾の右へ移動</button>
         <div class="spacer"></div>
         <label class="chk"><input type="checkbox" id="optFormula"> 数式を保持</label>
         <label class="chk"><input type="checkbox" id="optMerge" checked> 結合セルを保持</label>
@@ -1444,16 +1447,25 @@ function renderSrcOverlay() {
     var box = el("div", "selbox" + (it.main ? "" : " ghost"));
     box.style.cssText = "left:" + b.left + "px;top:" + b.top + "px;width:" + b.width + "px;height:" + b.height + "px;";
     if (it.main) {
+      // 選択した範囲は、どこを掴んでも出力側へ運べる（Excel と同じ感覚）
+      var startDrag = function (e) {
+        dragPayload = { kind: "range", sheet: S.active, r1: it.g.r1, c1: it.g.c1, r2: it.g.r2, c2: it.g.c2 };
+        e.dataTransfer.effectAllowed = "copy";
+        e.dataTransfer.setData("text/plain", rangeLabel(it.g));
+        pendingCollapse = null;
+      };
+      var endDrag = function () { dragPayload = null; pendingCollapse = null; clearGhost(true); };
+      box.draggable = true;
+      box.title = "ドラッグして出力シートへ置く";
+      box.addEventListener("dragstart", startDrag);
+      box.addEventListener("dragend", endDrag);
+
       var grab = el("div", "grab");
       grab.draggable = true;
       grab.innerHTML = "⠿ " + esc(rangeLabel(it.g));
       grab.title = "ドラッグして出力シートへ置く";
-      grab.addEventListener("dragstart", function (e) {
-        dragPayload = { kind: "range", sheet: S.active, r1: it.g.r1, c1: it.g.c1, r2: it.g.r2, c2: it.g.c2 };
-        e.dataTransfer.effectAllowed = "copy";
-        e.dataTransfer.setData("text/plain", rangeLabel(it.g));
-      });
-      grab.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
+      grab.addEventListener("dragstart", startDrag);
+      grab.addEventListener("dragend", endDrag);
       box.appendChild(grab);
     }
     ovl.appendChild(box);
@@ -1469,14 +1481,10 @@ function updateSelUI() {
     info.classList.remove("none");
     info.textContent = S.sheets[S.sel.sheet].name + "!" + rangeLabel(S.sel) + "  " + sz.h + "×" + sz.w;
     $("btnPlace").disabled = false;
-    $("btnAppendDown").disabled = false;
-    $("btnAppendRight").disabled = false;
   } else {
     info.classList.add("none");
     info.textContent = "未選択";
     $("btnPlace").disabled = true;
-    $("btnAppendDown").disabled = true;
-    $("btnAppendRight").disabled = true;
   }
 }
 
@@ -1495,6 +1503,9 @@ function revealSelection() {
 }
 
 /* --- マウスでの範囲選択 --- */
+/** 選択の中を押しただけ（運ばなかった）ときに、そのセルへ畳むための控え */
+var pendingCollapse = null;
+
 (function () {
   var wrap = $("srcGrid"), dragging = false, anchor = null;
   // 端まで引っ張ったら、まだ見えていない行・列の方向へ送りながら選択を伸ばす
@@ -1508,6 +1519,13 @@ function revealSelection() {
     if (e.target.closest(".grab")) return;
     var hit = srcGrid.cellAt(e.clientX, e.clientY, true);
     if (!hit) return;
+    // 選択の中から押したときは、出力へ運ぶドラッグとして扱う（ブラウザ側の drag に任せる）。
+    // 運ばずに離しただけなら、そのセルへ選択を畳む
+    if (e.target.closest(".selbox") && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      pendingCollapse = { r: hit.r, c: hit.c };
+      return;
+    }
+    pendingCollapse = null;
     var sh = activeSheet();
     // 見出しクリック → 行/列まるごと選び、その場に固定などのメニューを出す
     if (hit.rawR < 0 && hit.rawC >= 0) {
@@ -1543,6 +1561,12 @@ function revealSelection() {
     setSelection(anchor.r, anchor.c, hit.r, hit.c);
   });
   wrap.addEventListener("pointerup", function (e) {
+    // 選択の中を押して、運ばずに離した → そのセルだけの選択にする（Excel と同じ）
+    if (pendingCollapse) {
+      var p = pendingCollapse;
+      pendingCollapse = null;
+      setSelection(p.r, p.c, p.r, p.c);
+    }
     if (!dragging) return;
     dragging = false;
     scroller.stop();
@@ -1657,7 +1681,7 @@ function renderSheetList() {
       e.dataTransfer.effectAllowed = "copy";
       e.dataTransfer.setData("text/plain", sh.name);
     });
-    b.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
+    b.addEventListener("dragend", function () { dragPayload = null; clearGhost(true); });
     box.appendChild(b);
   });
   if (!S.sheets.length) box.innerHTML = '<p class="empty-note">ファイルを開くとシートが並びます。シート名をつまんで出力側へ落とすと、シート全体をまるごと配置できます。</p>';
@@ -1676,7 +1700,7 @@ function renderSrcTabs() {
       e.dataTransfer.effectAllowed = "copy";
       e.dataTransfer.setData("text/plain", sh.name);
     });
-    t.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
+    t.addEventListener("dragend", function () { dragPayload = null; clearGhost(true); });
     tabs.appendChild(t);
   });
 }
@@ -1811,7 +1835,7 @@ function renderOutOverlay(cont) {
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", rangeLabel(b));
     });
-    tag.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
+    tag.addEventListener("dragend", function () { dragPayload = null; clearGhost(true); });
     tag.addEventListener("click", function (e) { e.stopPropagation(); selectBlock(b.id); });
     n.appendChild(tag);
     ovl.appendChild(n);
@@ -1916,7 +1940,7 @@ function renderBlockList() {
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", rangeLabel(b));
     });
-    card.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
+    card.addEventListener("dragend", function () { dragPayload = null; clearGhost(true); });
     box.appendChild(card);
   });
 }
@@ -1969,7 +1993,11 @@ function showGhost(r, c, p) {
   ghostEl.firstChild.textContent = a1(r, c) + " へ " + sz.h + "×" + sz.w + "（" + sz.label + "）";
   if (ghostEl.parentNode !== dstGrid.canvas) dstGrid.canvas.appendChild(ghostEl);
 }
-function clearGhost() {
+/** 「末尾へ移動」で出した目印は、次に置くまで残す（そこへドラッグできるように） */
+var ghostPinned = false;
+function clearGhost(force) {
+  if (ghostPinned && !force) return;
+  ghostPinned = false;
   if (ghostEl && ghostEl.parentNode) ghostEl.parentNode.removeChild(ghostEl);
   $("dstGrid").classList.remove("dragover");
   if (dstScroller) dstScroller.stop();
@@ -1988,12 +2016,13 @@ function clearGhost() {
     e.preventDefault();
     e.dataTransfer.dropEffect = dragPayload.kind === "move" ? "move" : "copy";
     wrap.classList.add("dragover");
+    ghostPinned = false;          // 実際に運んでいる間は、目印はポインタに従う
     dstScroller.move(e.clientX, e.clientY);
     var hit = dstGrid.cellAt(e.clientX, e.clientY, true);
     if (hit) showGhost(Math.max(hit.rawR, 0), Math.max(hit.rawC, 0), dragPayload);
   });
   wrap.addEventListener("dragleave", function (e) {
-    if (e.target === wrap) clearGhost();
+    if (e.target === wrap) clearGhost(true);
   });
   wrap.addEventListener("drop", function (e) {
     if (!dragPayload) return;
@@ -2002,7 +2031,7 @@ function clearGhost() {
     if (!hit) return;
     dropPayload(dragPayload, Math.max(hit.rawR, 0), Math.max(hit.rawC, 0));
     dragPayload = null;
-    clearGhost();
+    clearGhost(true);
   });
   // 「出力へ配置」で武装したあとのクリック配置
   wrap.addEventListener("click", function (e) {
@@ -2021,10 +2050,11 @@ function clearGhost() {
     S.armed = null;
     wrap.classList.remove("armed");
     $("dstHint").textContent = "ここに置く";
-    clearGhost();
+    clearGhost(true);
   });
   wrap.addEventListener("pointermove", function (e) {
     if (!S.armed) { if (dstScroller) dstScroller.stop(); return; }
+    ghostPinned = false;
     dstScroller.move(e.clientX, e.clientY);
     var hit = dstGrid.cellAt(e.clientX, e.clientY, true);
     if (hit) showGhost(Math.max(hit.rawR, 0), Math.max(hit.rawC, 0), S.armed);
@@ -2751,33 +2781,29 @@ function appendAnchor(o, dir) {
   o.blocks.forEach(function (b) { if (b.dc < left) left = b.dc; });
   return { r: maxDestRow(o) + 1, c: left === Infinity ? 0 : left };
 }
-function placeAppend(dir) {
-  if (!S.sel) return;
+/** 選択範囲ぶんの目印。選択が無ければ 1 セルぶんの目印にする */
+function ghostPayload() {
+  if (S.sel) {
+    return { kind: "range", sheet: S.sel.sheet, r1: S.sel.r1, c1: S.sel.c1, r2: S.sel.r2, c2: S.sel.c2 };
+  }
+  return { kind: "range", sheet: S.active, r1: 0, c1: 0, r2: 0, c2: 0 };
+}
+
+/** 末尾の続きまで出力側の表示を動かし、その場所に目印を残す（置きはしない） */
+function gotoAppend(dir) {
   var o = activeOut() || addOutSheet("抜粋1", true);
   var at = appendAnchor(o, dir);
-  var b = addBlock({ sheet: S.sel.sheet, r1: S.sel.r1, c1: S.sel.c1, r2: S.sel.r2, c2: S.sel.c2 }, at.r, at.c, o);
-  clearGhost();
-  revealBlock(b);
-  log("配置: " + S.sheets[b.sheet].name + "!" + rangeLabel(b) + " → " + o.name + "!" + a1(b.dr, b.dc), "ok");
-  toast((dir === "right" ? "末尾の右" : "末尾の下") + "に置きました（" + a1(b.dr, b.dc) + "）");
+  dstGrid.scrollToCell(at.r, at.c);
+  dstGrid.draw();
+  ghostPinned = false;
+  showGhost(at.r, at.c, ghostPayload());
+  ghostPinned = true;                      // 次に置くまで目印を残す
+  log((dir === "right" ? "末尾の右" : "末尾の下") + " " + a1(at.r, at.c) + " へ移動");
+  toast(a1(at.r, at.c) + " へ移動しました。ここへドラッグして置けます");
 }
 ["Down", "Right"].forEach(function (d) {
   var dir = d.toLowerCase();
-  var btn = $("btnAppend" + d);
-  btn.addEventListener("click", function () { placeAppend(dir); });
-  // どこに置かれるかを、押す前に出力側で見せる
-  btn.addEventListener("mouseenter", function () {
-    if (!S.sel || btn.disabled) return;
-    var at = appendAnchor(activeOut(), dir);
-    showGhost(at.r, at.c, { kind: "range", sheet: S.sel.sheet, r1: S.sel.r1, c1: S.sel.c1, r2: S.sel.r2, c2: S.sel.c2 });
-  });
-  btn.addEventListener("mouseleave", clearGhost);
-  btn.addEventListener("focus", function () {
-    if (!S.sel || btn.disabled) return;
-    var at = appendAnchor(activeOut(), dir);
-    showGhost(at.r, at.c, { kind: "range", sheet: S.sel.sheet, r1: S.sel.r1, c1: S.sel.c1, r2: S.sel.r2, c2: S.sel.c2 });
-  });
-  btn.addEventListener("blur", clearGhost);
+  $("btnAppend" + d).addEventListener("click", function () { gotoAppend(dir); });
 });
 
 $("btnPlace").addEventListener("click", function () {
@@ -2793,7 +2819,7 @@ document.addEventListener("keydown", function (e) {
     setMaxSrc(false);
   }
   if (e.key === "Escape" && S.armed) {
-    S.armed = null; clearGhost();
+    S.armed = null; clearGhost(true);
     $("dstGrid").classList.remove("armed");
     $("dstHint").textContent = "ここに置く";
   }
