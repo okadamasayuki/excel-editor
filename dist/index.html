@@ -904,6 +904,10 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         </span>
         <label for="repeatValues" id="repeatLabel">どの行を繰り返しますか？</label>
         <input class="inp" id="repeatValues" placeholder="10, 12, 17, 20">
+        <span class="rf-kind" role="radiogroup" aria-label="1周ぶんの並べ方">
+          <label><input type="radio" name="repeatDir" value="down" checked>縦に積む</label>
+          <label><input type="radio" name="repeatDir" value="across">横に並べる</label>
+        </span>
         <button class="btn sm primary" id="repeatOk">この行で繰り返す</button>
         <button class="btn sm" id="repeatCancel">やめる</button>
         <span class="hint" id="repeatHint">カンマ区切り。10-14 のように範囲でも指定できます</span>
@@ -913,11 +917,12 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
 説明: 毎月の売上レポートをつくる手順
 
 シート追加 月次レポート
-売上明細のA1からE1を月次レポートのA1に置く
+売上明細のA1からE1を月次レポートのA1に置く（名前: 見出し）
+支店別サマリのA1からC5を 見出し の下に1行あけて置く
 
-繰り返し 行 = 10, 12, 17, 20
+繰り返し 行 = 10, 12, 17, 20 / 横に並べる
   売上明細の{行}行目を続けて置く
-  支店別サマリの{行}行目を右に続けて置く
+  支店別サマリの{行}行目を続けて置く
 ここまで"></textarea>
 
     </div>
@@ -2352,6 +2357,45 @@ function nextFreeAnchor(o) {
   return { r: cont.maxR < 0 ? 0 : cont.maxR + 2, c: 0 };
 }
 
+/**
+ * 繰り返しの「帯」＝ 1 周ぶんを置く場所。
+ * 縦に積む＝前の周の下、横に並べる＝前の周の右。
+ * 周ごとに区切るので、離れた場所に背の高いものがあっても引っぱられない。
+ */
+function bandBottom(ctx, o) {
+  if (ctx.iter && ctx.iter.r2 != null) return ctx.iter.r2;
+  return ctx.band ? ctx.band.r - 1 : maxDestRow(o);
+}
+/** その周で置いたものの広がりを覚えておく */
+function noteIter(ctx, b) {
+  if (!ctx.iter) return;
+  var r = blockRect(b);
+  if (ctx.iter.r1 == null || r.r1 < ctx.iter.r1) ctx.iter.r1 = r.r1;
+  if (ctx.iter.c1 == null || r.c1 < ctx.iter.c1) ctx.iter.c1 = r.c1;
+  if (ctx.iter.r2 == null || r.r2 > ctx.iter.r2) ctx.iter.r2 = r.r2;
+  if (ctx.iter.c2 == null || r.c2 > ctx.iter.c2) ctx.iter.c2 = r.c2;
+}
+
+/** 名前をつけたブロックを探す（同じ名前があれば後に置いたほうが勝つ） */
+function findNamed(name) {
+  var hit = null;
+  S.out.forEach(function (o) {
+    o.blocks.forEach(function (b) { if (b.name && b.name === name) hit = { b: b, out: o }; });
+  });
+  return hit;
+}
+/** 「1行あけて」「2列あけて」「1つあけて」→ {r, c} のすきま */
+function readGap(txt) {
+  var g = { r: 0, c: 0 }, m;
+  var re = /(\d+)\s*(行|列|つ)\s*あけ/g;
+  while ((m = re.exec(txt))) {
+    if (m[2] === "行") g.r = +m[1];
+    else if (m[2] === "列") g.c = +m[1];
+    else { g.r = +m[1]; g.c = +m[1]; }
+  }
+  return g;
+}
+
 function renderBlockList() {
   var box = $("blockList");
   box.innerHTML = "";
@@ -2663,11 +2707,29 @@ function execLine(raw, ctx) {
   var trans = /(転置|行列を?入れ替)/.test(t);
   t = t.replace(/[（(]?\s*(?:転置|行列を?入れ替える?)\s*[）)]?/g, "").trim();
 
+  // 「（名前: 見出し）」＝置いたものに名前をつけ、あとの行から位置の目印にできる
+  var giveName = null, nm0 = /[（(]\s*(?:名前|なまえ|name)\s*[:：]\s*([^）)]+?)\s*[）)]/.exec(t);
+  if (nm0) { giveName = nm0[1].trim(); t = t.replace(nm0[0], "").trim(); }
+
+  // 「見出し の右に置く」＝名前をつけたブロックのとなりへ。
+  // 名前が見つからないときは、これまでどおり「直前の右／下」として扱う
+  var named = null;
+  var nr = /^(.*?)を\s*(.+?)\s*の\s*(右下|左下|右上|右|下)\s*に\s*(.*?)(?:置く|貼り?付ける?|配置|入れる)\s*$/.exec(t);
+  if (nr) {
+    var hitN = findNamed(nr[2].trim());
+    if (hitN) {
+      named = { b: hitN.b, out: hitN.out, dir: nr[3], gap: readGap(nr[4] || "") };
+      t = nr[1].trim();
+    }
+  }
+
   // 「続けて置く」＝直前に置いたブロックの下（または右）に続ける
   var cont = null, mc;
-  if ((mc = /(?:右|横)\s*に\s*(?:続けて|並べて)?\s*(?:置く|配置|入れる|並べる)\s*$/.exec(t))) cont = "right";
-  else if ((mc = /(?:(?:その)?(?:下|後ろ|次の行)\s*に\s*)?続けて\s*(?:置く|配置|入れる)?\s*$/.exec(t))) cont = "down";
-  else if ((mc = /(?:その)?(?:下|後ろ)\s*に\s*(?:置く|貼り?付ける?|配置)\s*$/.exec(t))) cont = "down";
+  var gap = readGap(t);
+  if (named) { /* 位置は名前で決まっているので、続けて置くの判定はしない */ }
+  else if ((mc = /(?:右|横)\s*に\s*(?:続けて|並べて)?\s*(?:置く|配置|入れる|並べる)\s*$/.exec(t))) cont = "right";
+  else if ((mc = /(?:(?:その)?(?:下|後ろ|次の行)\s*に\s*)?(?:\d+\s*(?:行|列|つ)\s*あけて\s*)?続けて\s*(?:置く|配置|入れる)?\s*$/.exec(t))) cont = "down";
+  else if ((mc = /(?:その)?(?:下|後ろ)\s*に\s*(?:\d+\s*(?:行|列|つ)\s*あけて\s*)?(?:置く|貼り?付ける?|配置)\s*$/.exec(t))) cont = "down";
   if (cont) t = t.slice(0, mc.index).replace(/[をは]\s*$/, "").trim();
 
   // 「XXX を YYY に置く」 / 「XXX -> YYY」 に分解
@@ -2688,15 +2750,18 @@ function execLine(raw, ctx) {
   // 出力先シート
   var outHit = matchOutName(dstTxt);
   var o = outHit ? S.out[outHit.i] : null;
+  if (!o && named) o = named.out;
   if (!o && cont && ctx.last) o = ctx.last.out;
   if (!o) o = activeOut() || addOutSheet("抜粋1", true);
   var dstClean = outHit ? dstTxt.replace(S.out[outHit.i].name, "") : dstTxt;
   var anchor = null;
   var am = /([A-Z]{1,3}\d{1,7})/i.exec(dstClean.replace(/\s+/g, ""));
   if (am) anchor = parseCell(am[1]);
-  // 繰り返しの 2 周目以降は、位置を書いた行も前の周の下に送る
-  // （同じ処理を別の行で繰り返すとき、毎回同じ場所に重ならないように）
-  if (anchor && ctx.shift && ctx.shift[o.id]) anchor = { r: anchor.r + ctx.shift[o.id], c: anchor.c };
+  // 繰り返しの 2 周目以降は、位置を書いた行も帯のぶんだけ送る
+  // （縦に積むなら下へ、横に並べるなら右へ。毎回同じ場所に重ならないように）
+  if (anchor && ctx.band && ctx.band.off) {
+    anchor = { r: anchor.r + ctx.band.off.r, c: anchor.c + ctx.band.off.c };
+  }
 
   // 元データのシート
   var shHit = matchSheetName(srcTxt);
@@ -2712,28 +2777,41 @@ function execLine(raw, ctx) {
   if (!g) return { err: "範囲を読み取れません" };
 
   // 置き場所を決める
-  if (anchor) {
+  if (named) {
+    // 名前をつけたブロックのとなりへ。直前が何であっても迷わない
+    var nb = blockRect(named.b), d = named.dir, ng = named.gap;
+    var nr2 = nb.r1, nc2 = nb.c1;
+    if (d === "右" || d === "右上") { nr2 = nb.r1; nc2 = nb.c2 + 1 + ng.c; }
+    else if (d === "下") { nr2 = nb.r2 + 1 + ng.r; nc2 = nb.c1; }
+    else if (d === "右下") { nr2 = nb.r2 + 1 + ng.r; nc2 = nb.c2 + 1 + ng.c; }
+    else if (d === "左下") { nr2 = nb.r2 + 1 + ng.r; nc2 = Math.max(0, nb.c1 - ng.c); }
+    anchor = { r: Math.max(0, nr2), c: Math.max(0, nc2) };
+    ctx.flowCol = anchor.c;
+  } else if (anchor) {
     ctx.flowCol = anchor.c;            // 以降「下に続ける」ときの左端
   } else if (cont && ctx.last) {
     var lb = ctx.last.b;
-    var ls = rangeSize(lb), lh = lb.trans ? ls.w : ls.h, lw = lb.trans ? ls.h : ls.w;
+    var lr = blockRect(lb);
     if (cont === "right") {
       // 右に続ける＝いま組み立てている行の右隣へ
-      anchor = { r: lb.dr, c: lb.dc + lw };
+      anchor = { r: lb.dr, c: lr.c2 + 1 + gap.c };
     } else {
-      // 下に続ける＝使用済みの最終行の次の行へ。列は行の左端に戻す
+      // 下に続ける＝いま組み立てているかたまりの下へ。列は左端に戻す
       // （戻さないと 2 周目以降が右へずれ続けて階段状になる）
       var col = ctx.flowCol != null ? ctx.flowCol : lb.dc;
-      anchor = { r: maxDestRow(o) + 1, c: col };
+      anchor = { r: (ctx.band ? bandBottom(ctx, o) : maxDestRow(o)) + 1 + gap.r, c: col };
       ctx.flowCol = col;
     }
   }
+  if (!anchor && ctx.band) { anchor = { r: ctx.band.r, c: ctx.band.c }; ctx.flowCol = ctx.band.c; }
   if (!anchor) { var fa = nextFreeAnchor(o); anchor = { r: fa.r, c: fa.c }; ctx.flowCol = fa.c; }
 
   S.activeOut = S.out.indexOf(o);
   var b = addBlock({ sheet: sheetIdx, r1: g.r1, c1: g.c1, r2: g.r2, c2: g.c2 }, anchor.r, anchor.c, o);
   if (trans) b.trans = true;
+  if (giveName) b.name = giveName;
   ctx.last = { b: b, out: o };
+  noteIter(ctx, b);
   return {
     ok: true, block: b,
     msg: S.sheets[sheetIdx].name + "!" + rangeLabel(b) + " → " + o.name + "!" + a1(b.dr, b.dc) + (trans ? "（転置）" : "")
@@ -2795,7 +2873,17 @@ function expandScript(text) {
     if (!m) { steps.push({ n: i + 1, text: lines[i] }); i++; continue; }
 
     var name = m[1].replace(/^[{｛]|[}｝]$/g, "");
-    var values = parseValueList(m[2], name);
+    // 「/ 横に並べる」「／ 1列あけて横に並べる」＝ 1 周ぶんをどう並べるか
+    var vals = m[2], dir = "down", gapR = 0, gapC = 0;
+    var om = /[\/／]\s*([^\/／]*?(?:横に並べる|よこに並べる|縦に積む|たてに積む|横に|縦に)[^\/／]*)$/.exec(vals);
+    if (om) {
+      var opt = om[1];
+      if (/(横に並べる|よこに並べる|横に)/.test(opt)) dir = "across";
+      var og = readGap(opt);
+      gapR = og.r; gapC = og.c;
+      vals = vals.slice(0, om.index);
+    }
+    var values = parseValueList(vals, name);
     if (!values.length) { errors.push({ n: i + 1, msg: "繰り返しの値を読み取れません" }); i++; continue; }
 
     var body = [], j = i + 1, closed = false;
@@ -2813,7 +2901,10 @@ function expandScript(text) {
 
     values.forEach(function (v, vi) {
       body.forEach(function (b) {
-        steps.push({ n: b.n, text: substVars(b.text, name, v), loop: name + "=" + v, it: vi });
+        steps.push({
+          n: b.n, text: substVars(b.text, name, v), loop: name + "=" + v, it: vi,
+          dir: dir, gapR: gapR, gapC: gapC
+        });
       });
     });
     i = j + 1;
@@ -2847,14 +2938,30 @@ function runScript(text, clearFirst) {
   S.noSnap = true; S.batch = true;
   if (clearFirst) { S.out = []; S.activeOut = 0; S.selBlock = null; }
 
-  var ctx = { last: null, shift: null }, applied = 0, errs = [], curIter = -1;
+  var ctx = { last: null, band: null, iter: null }, applied = 0, errs = [], curIter = -1;
+  var loopStart = null, prevIter = null;
   ex.steps.forEach(function (st) {
-    // 繰り返しの周が変わったら、位置指定をその分だけ下へずらす基準を取り直す
-    if (st.it == null) { ctx.shift = null; curIter = -1; }
+    // 繰り返しの周が変わったら、その周を置く「帯」を決め直す
+    if (st.it == null) { ctx.band = null; ctx.iter = null; curIter = -1; loopStart = null; prevIter = null; }
     else if (st.it !== curIter) {
+      if (ctx.iter && ctx.iter.r1 != null) {
+        if (!loopStart) loopStart = { r: ctx.iter.r1, c: ctx.iter.c1 };
+        prevIter = ctx.iter;
+      }
       curIter = st.it;
-      ctx.shift = {};
-      if (curIter > 0) S.out.forEach(function (o) { ctx.shift[o.id] = maxDestRow(o) + 1; });
+      ctx.iter = { r1: null, c1: null, r2: null, c2: null };
+      if (curIter === 0 || !loopStart || !prevIter) {
+        ctx.band = null;                       // 1 周目は今までどおりの決め方に任せる
+      } else if (st.dir === "across") {
+        // 横に並べる＝前の周の右へ。行は 1 周目と同じ高さから
+        ctx.band = { r: loopStart.r, c: prevIter.c2 + 1 + (st.gapC || 0) };
+        ctx.band.off = { r: ctx.band.r - loopStart.r, c: ctx.band.c - loopStart.c };
+      } else {
+        // 縦に積む＝前の周の下へ。列は 1 周目と同じ左端に戻す
+        ctx.band = { r: prevIter.r2 + 1 + (st.gapR || 0), c: loopStart.c };
+        ctx.band.off = { r: ctx.band.r - loopStart.r, c: ctx.band.c - loopStart.c };
+      }
+      ctx.flowCol = ctx.band ? ctx.band.c : null;
     }
     var r;
     try { r = execLine(st.text, ctx); }
@@ -3046,6 +3153,11 @@ function setRepeatKind(kind) {
   var ns = document.querySelectorAll('input[name="repeatKind"]');
   for (var i = 0; i < ns.length; i++) ns[i].checked = (ns[i].value === kind);
 }
+/** 1 周ぶんを縦に積むか、横に並べるか */
+function repeatDir() {
+  var n = document.querySelector('input[name="repeatDir"]:checked');
+  return n ? n.value : "down";
+}
 
 var REPEAT_HELP = {
   "行": { ex: "10, 12, 17, 20", hint: "カンマ区切り。10-14 のように範囲でも指定できます",
@@ -3124,7 +3236,8 @@ function wrapAsRepeat(valuesText, kind) {
     });
   }
 
-  var head = "繰り返し " + t.varName + " = " + values;
+  var head = "繰り返し " + t.varName + " = " + values
+    + (repeatDir() === "across" ? " / 横に並べる" : "");
   var wrapped = [head].concat(body.map(function (l) { return "  " + l.trim(); }), ["ここまで"]);
   ta.value = t.lines.slice(0, t.from).concat(wrapped, t.lines.slice(t.to + 1)).join("\n");
   hideRepeatForm();

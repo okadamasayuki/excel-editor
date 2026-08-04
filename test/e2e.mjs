@@ -583,6 +583,113 @@ check("包んだ手順書がそのまま4周ぶん動く",
   wrapDest.join(",") === "まとめ!A1,まとめ!F1,まとめ!A2,まとめ!F2,まとめ!A3,まとめ!F3,まとめ!A4,まとめ!F4",
   wrapDest.join(","));
 
+// ---- 5b-2. 名前をつけて、その右・下に置く（案B） -------------------------
+/** 手順書を実行して、置かれた先を「元!範囲 → 出力!位置」で返す */
+const placedBy = async (script) => await page.evaluate((sc) => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript(sc, true);
+  const col = (c) => { let s = "", n = c + 1; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - m - 1) / 26; } return s; };
+  return A.S.out.flatMap((o) => o.blocks.map((b) => o.name + "!" + col(b.dc) + (b.dr + 1)));
+}, script);
+
+const named = await placedBy(`シート追加 まとめ
+売上明細のA1:C4をまとめのA1に置く（名前: 見出し）
+支店別サマリのA1:B4を 見出し の右に置く
+商品マスタのA1:C3を 見出し の下に置く
+売上明細のA1:B3を 見出し の右下に置く`);
+check("名前をつけた相手の右・下・右下に置ける",
+  named.join(",") === "まとめ!A1,まとめ!D1,まとめ!A5,まとめ!D5", named.join(","));
+check("名前がブロックに残る",
+  (await page.evaluate(() => window.__app.S.out[0].blocks[0].name)) === "見出し",
+  await page.evaluate(() => window.__app.S.out[0].blocks[0].name));
+
+const gapped = await placedBy(`シート追加 すきま
+売上明細のA1:C4をすきまのA1に置く（名前: 頭）
+商品マスタのA1:C3を 頭 の下に1行あけて置く
+支店別サマリのA1:B4を 頭 の右に2列あけて置く`);
+check("すきまを指定して置ける",
+  gapped.join(",") === "すきま!A1,すきま!A6,すきま!F1", gapped.join(","));
+
+// 直前が何であっても、狙った相手のとなりに置ける（ここが「続けて置く」との違い）
+const faraway = await placedBy(`シート追加 遠く
+売上明細のA1:C2を遠くのA1に置く（名前: 起点）
+商品マスタのA1:C2を遠くのA20に置く
+支店別サマリのA1:B2を 起点 の右に置く`);
+check("直前ではなく、名前で指した相手のとなりに置く",
+  faraway.join(",") === "遠く!A1,遠く!A20,遠く!D1", faraway.join(","));
+
+// 名前が無いときは、これまでどおり「直前の右」
+const legacy = await placedBy(`シート追加 従来
+売上明細のA1:C2を従来のA1に置く
+支店別サマリのA1:B2を右に置く`);
+check("名前を使わない「右に置く」は今までどおり",
+  legacy.join(",") === "従来!A1,従来!D1", legacy.join(","));
+
+// ---- 5b-3. 1 周ぶんを横に並べる（案A） -----------------------------------
+const across = await placedBy(`シート追加 横
+売上明細のA1:C1を横のA1に置く
+繰り返し 行 = 10, 12, 17 / 横に並べる
+  売上明細の{行}行目を続けて置く
+  支店別サマリの{行}行目を続けて置く
+ここまで`);
+check("横に並べると、周ごとに右へ移る",
+  across.join(",") === "横!A1,横!A2,横!A3,横!F2,横!F3,横!K2,横!K3", across.join(","));
+
+const acrossGap = await placedBy(`シート追加 横すき
+繰り返し 行 = 10, 12 / 1列あけて横に並べる
+  売上明細の{行}行目を続けて置く
+  支店別サマリの{行}行目を続けて置く
+ここまで`);
+check("横に並べるときも、すきまを指定できる",
+  acrossGap.join(",") === "横すき!A1,横すき!A2,横すき!G1,横すき!G2", acrossGap.join(","));
+
+const downGap = await placedBy(`シート追加 縦すき
+繰り返し 行 = 10, 12 / 1行あけて縦に積む
+  売上明細の{行}行目を続けて置く
+ここまで`);
+check("縦に積むときも、すきまを指定できる",
+  downGap.join(",") === "縦すき!A1,縦すき!A3", downGap.join(","));
+
+// 位置を書いた行も、周ごとに右へついてくる
+const acrossAnchor = await placedBy(`シート追加 合わせ
+繰り返し 行 = 10, 12, 17 / 横に並べる
+  売上明細の{行}行目を合わせのA1に置く
+  支店別サマリの{行}行目を続けて置く
+ここまで`);
+check("位置を書いた行も、周ごとに右へついてくる",
+  acrossAnchor.join(",") === "合わせ!A1,合わせ!A2,合わせ!F1,合わせ!F2,合わせ!K1,合わせ!K2",
+  acrossAnchor.join(","));
+
+// 何も書かなければ、今までどおり縦に積む
+const downDefault = await placedBy(`シート追加 縦
+繰り返し 行 = 10, 12, 17
+  売上明細の{行}行目を続けて置く
+  支店別サマリの{行}行目を右に続けて置く
+ここまで`);
+check("何も書かなければ、今までどおり縦に積む",
+  downDefault.join(",") === "縦!A1,縦!F1,縦!A2,縦!F2,縦!A3,縦!F3", downDefault.join(","));
+
+// 「繰り返しにする」からも横並びを選べる
+await page.evaluate(() => window.__app.openScript(true));   // すでに開いていても確実に開く
+await page.fill("#scText", "シート追加 ボタン\n売上明細の10行目をボタンのA1に置く");
+await page.click("#scRepeat");
+await page.waitForTimeout(120);
+check("繰り返しの欄で並べ方を選べる", await page.evaluate(() =>
+  [...document.querySelectorAll('input[name="repeatDir"]')].map((n) => n.value).join(",")) === "down,across");
+await page.click('.repeat-form .rf-kind label:has-text("横に並べる")');
+await page.fill("#repeatValues", "10, 12");
+await page.click("#repeatOk");
+await page.waitForTimeout(120);
+check("選んだ並べ方が手順書に入る",
+  /繰り返し 行 = 10, 12 \/ 横に並べる/.test(await page.inputValue("#scText")),
+  (await page.inputValue("#scText")).split("\n").filter((l) => /繰り返し/.test(l)).join(""));
+// 並べ方は次の検証に残るので、既定へ戻しておく（欄は閉じているので直接戻す）
+await page.evaluate(() => {
+  document.querySelector('input[name="repeatDir"][value="down"]').checked = true;
+  window.__app.S.out = []; window.__app.S.selBlock = null;
+});
+
 // ---- 5c-2. 列とシートの繰り返し ------------------------------------------
 /** 手順書を書いて、種類を選んで、繰り返しにして、実行する */
 const makeRepeat = async (script, kind, values) => {
