@@ -383,6 +383,8 @@ check("下に続けると行の左端に戻る",
 
 // 薄いブロックを積んでも中身が読めるよう、ラベルは選択中/ホバー中だけ
 await page.click("#scClose");                       // 本体をさわるので手順書を閉じる
+await page.mouse.move(2, 2);                        // どのブロックにも触れていない位置へ
+await page.waitForTimeout(80);
 const tagsShown = await page.$$eval("#dstGrid .blockbox .tag",
   (ns) => ns.filter((n) => getComputedStyle(n).visibility === "visible").length);
 check("ブロックのラベルは既定で隠れている", tagsShown <= 1, `${tagsShown}件が表示中`);
@@ -869,11 +871,81 @@ await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = n
 await page.click("#btnSample");
 await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
 
+// ---- 9f-3. 出力シートで範囲を選ぶと集計が出る ---------------------------
+// 支店別サマリ A2:C7（見出し + 4支店 + 合計）を置いて、数値列の集計を確かめる
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null; A.S.dsel = null;
+  A.runScript("シート追加 集計確認\n支店別サマリのA2:C7を集計確認のA1に置く", true);
+});
+await page.waitForTimeout(150);
+check("選ぶ前は集計を出さない", !(await page.isVisible("#dstStats")));
+
+// C列（売上合計）を列見出しのクリックで選ぶ
+const colC = await page.locator('#dstGrid .gcolh .gh[data-c="2"]').boundingBox();
+await page.mouse.click(colC.x + 20, colC.y + 10);
+await page.waitForTimeout(120);
+check("列を選ぶと集計が出る", await page.isVisible("#dstStats"));
+const stats = await page.textContent("#dstStats");
+// 支店別サマリ: 見出し「売上合計」+ 375600 / 432700 / 558800 / 569300 / 合計1936400
+check("データの個数が出る", /データの個数\s*6/.test(stats), stats);
+check("数値の個数が出る", /数値の個数\s*5/.test(stats), stats);
+check("合計が出る", /合計\s*3,872,800/.test(stats), stats);
+check("平均が出る", /平均\s*774,560/.test(stats), stats);
+check("最大が出る", /最大\s*1,936,400/.test(stats), stats);
+check("最小が出る", /最小\s*375,600/.test(stats), stats);
+
+// 数値のない範囲では個数だけ
+await page.evaluate(() => window.__app.setDstSel(0, 0, 0, 2));
+check("数値が無ければ個数だけ出す",
+  /データの個数\s*3/.test(await page.textContent("#dstStats"))
+  && !/合計/.test(await page.textContent("#dstStats")),
+  await page.textContent("#dstStats"));
+
+// データの上でも Shift+ドラッグなら選べる（そのままのドラッグはブロックの移動が優先）
+const c1 = await page.locator('#dstGrid .gc[data-r="1"][data-c="1"]').boundingBox();
+const c2 = await page.locator('#dstGrid .gc[data-r="4"][data-c="2"]').boundingBox();
+await page.keyboard.down("Shift");
+await page.mouse.move(c1.x + 40, c1.y + 12);
+await page.mouse.down();
+await page.mouse.move(c2.x + 40, c2.y + 12, { steps: 8 });
+await page.mouse.up();
+await page.keyboard.up("Shift");
+check("Shift+ドラッグで範囲を選べる",
+  /範囲\s*B2:C5/.test(await page.textContent("#dstStats")), await page.textContent("#dstStats"));
+check("選んだ範囲の合計が出る",
+  /数値の個数\s*8/.test(await page.textContent("#dstStats")), await page.textContent("#dstStats"));
+// そのままのドラッグではブロックが動く（選択にはならない）
+const dcBefore = await page.evaluate(() => window.__app.S.out[0].blocks[0].dc);
+await page.mouse.move(c1.x + 40, c1.y + 12);
+await page.mouse.down();
+await page.mouse.move(c2.x + 40, c2.y + 12, { steps: 8 });
+await page.mouse.up();
+check("そのままのドラッグはブロックの移動になる",
+  (await page.evaluate(() => window.__app.S.out[0].blocks[0].dc)) !== dcBefore,
+  `dc ${dcBefore} → ${await page.evaluate(() => window.__app.S.out[0].blocks[0].dc)}`);
+
+// ブロックをクリックすると、そのブロックぶんの集計になる
+await page.evaluate(() => {
+  const A = window.__app;
+  A.clearDstSel();
+  A.runScript("シート追加 集計確認\n支店別サマリのA2:C7を集計確認のA1に置く", true);
+});
+await page.waitForTimeout(150);
+await page.click("#dstGrid .blockbox");
+await page.waitForTimeout(120);
+check("ブロックを選ぶとその範囲の集計になる",
+  /範囲\s*A1:C6/.test(await page.textContent("#dstStats")), await page.textContent("#dstStats"));
+
+await page.evaluate(() => { window.__app.clearDstSel(); window.__app.S.out = []; window.__app.S.selBlock = null; });
+await page.click("#btnSample");
+await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
+
 // ---- 9g. 画面まわり（折りたたみ・見出し・+ボタン・並べ方） ---------------
 // ヘッダは名前だけ
 const heads = await page.$$eval(".pane-head", (ns) => ns.map((n) => n.textContent.trim()));
 check("ペインの見出しは名前と操作だけになる",
-  /^‹\s*ブック構成$/.test(heads[0]) && /^元データ/.test(heads[1]) && /^出力シート$/.test(heads[2]),
+  /^‹\s*ブック構成$/.test(heads[0]) && /^元データ\s*⤢?/.test(heads[1]) && /^出力シート\s*⤢?/.test(heads[2]),
   heads.join(" | "));
 check("選択範囲の表示は出さない", (await page.locator("#selInfo").count()) === 0);
 
@@ -959,6 +1031,19 @@ const evened = await page.evaluate(() => ({
 }));
 check("ダブルクリックで半分に戻る", Math.abs(evened.src - evened.dst) < 10,
   `${evened.src} / ${evened.dst}`);
+
+// 出力シートの全画面表示
+await page.click("#btnMaxDst");
+await page.waitForTimeout(250);
+check("出力シートも全画面にできる",
+  !(await page.isVisible("#srcGrid")) && (await page.isVisible("#dstGrid")));
+check("全画面の出力にもセルが描かれる",
+  (await page.$$eval("#dstGrid .gc", (ns) => ns.length)) > 20,
+  String(await page.$$eval("#dstGrid .gc", (ns) => ns.length)));
+check("ボタンが戻す表示になる", (await page.textContent("#btnMaxDst")) === "⤡ 戻す");
+await page.keyboard.press("Escape");
+await page.waitForTimeout(250);
+check("Escで戻る", await page.isVisible("#srcGrid"));
 
 // 左右／上下の並べ替え
 const sideBySide = await page.evaluate(() => {
