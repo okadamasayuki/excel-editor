@@ -65,6 +65,11 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
 
+// 社内ファイルを扱う道具なので「外に出ていない」ことを実測で押さえる。
+// ページ本体の取得より後に発生した通信をすべて記録する。
+const requests = [];
+page.on("request", (r) => requests.push({ url: r.url(), method: r.method(), type: r.resourceType() }));
+
 await page.goto(baseUrl);
 await page.waitForFunction(() => !!window.__app);
 
@@ -222,6 +227,107 @@ check("狭い画面でも横スクロールしない", overflowNarrow <= 1, `ove
 await page.screenshot({ path: join(root, "test/shots/narrow.png"), fullPage: false });
 
 check("JSエラーが出ていない", errors.length === 0, errors.slice(0, 3).join(" | "));
+
+// ---- 9. 手順書（同じ処理の使い回し / 引き継ぎ） -------------------------
+page.on("dialog", (d) => d.accept());   // 上書き確認などは通す
+await page.click("#tabScript");
+check("手順書タブに切り替わる", await page.isVisible("#scText"));
+
+// 今の配置から手順書を自動生成できる
+await page.click("#scFromBlocks");
+const generated = await page.inputValue("#scText");
+check("今の配置から手順書ができる",
+  /元ファイル: サンプル売上\.xlsx/.test(generated) && /シート追加 抜粋1/.test(generated)
+  && /を抜粋1の[A-Z]+\d+に置く/.test(generated),
+  generated.split("\n").filter((l) => l.trim()).slice(0, 3).join(" / "));
+
+// 繰り返し + 続けて置く。10/12/17/20 行目を 3 シートぶん縦に積む
+const recipe = `# 元ファイル: サンプル売上.xlsx
+説明: 各行を3シートぶん並べる
+
+シート追加 行そろえ
+繰り返し 行 = 10, 12, 17, 20
+  売上明細の{行}行目を行そろえのA1に置く
+  支店別サマリの{行}行目を続けて置く
+  商品マスタの{行}行目を続けて置く
+ここまで`;
+await page.fill("#scText", recipe);
+await page.click("#scRun");
+await page.waitForTimeout(200);
+
+const rBlocks = await page.$$eval("#blockList .block-card .src", (ns) => ns.map((n) => n.textContent));
+check("繰り返しが 4値 × 3行 = 12件に展開される", rBlocks.length === 12, `${rBlocks.length}件`);
+const rDest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
+check("1件目は A1", rDest[0] === "行そろえ!A1", rDest[0]);
+check("続けて置くで1行ずつ下に積まれる", rDest[1] === "行そろえ!A2" && rDest[2] === "行そろえ!A3",
+  rDest.slice(0, 3).join(" / "));
+check("2周目も続けて積まれる", rDest[3] === "行そろえ!A4" && rDest[11] === "行そろえ!A12",
+  rDest.slice(3, 4) + " … " + rDest[11]);
+check("{行} が値に置き換わる", rBlocks[0] === "売上明細!A10:E10" && rBlocks[4] === "支店別サマリ!A12:C12",
+  rBlocks[0] + " / " + rBlocks[4]);
+
+// 出力の中身を確認（12行目 = 4周目の1行目 = 売上明細の20行目）
+const [dl2] = await Promise.all([page.waitForEvent("download"), page.click("#btnGen")]);
+const out2 = join(tmp, "recipe.xlsx");
+await dl2.saveAs(out2);
+const wb2 = XLSX.read(readFileSync(out2), { type: "buffer" });
+const ws3 = wb2.Sheets["行そろえ"];
+const src1 = XLSX.read(readFileSync(out2), { type: "buffer" }); // 参照用
+check("手順書の出力シート名が反映される", !!ws3, wb2.SheetNames.join(","));
+check("1行目に売上明細の10行目が入る", ws3 && ws3["B1"] && typeof ws3["B1"].v === "string", ws3 && ws3["B1"] && String(ws3["B1"].v));
+check("10行分が縦に並ぶ", ws3 && ws3["!ref"] === "A1:E12", ws3 && ws3["!ref"]);
+
+// 「下に続ける」と「右に続ける」を混ぜても、周の先頭は左端に戻る（階段状にならない）
+await page.fill("#scText", `シート追加 横並び
+売上明細のA2からE2を横並びのA1に置く
+繰り返し 行 = 10, 12, 17
+  売上明細の{行}行目を続けて置く
+  支店別サマリの3行目を右に続けて置く
+ここまで`);
+await page.click("#scRun");
+await page.waitForTimeout(200);
+const zig = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
+check("下に続けると行の左端に戻る",
+  zig.join(",") === "横並び!A1,横並び!A2,横並び!F2,横並び!A3,横並び!F3,横並び!A4,横並び!F4",
+  zig.join(","));
+
+// 薄いブロックを積んでも中身が読めるよう、ラベルは選択中/ホバー中だけ
+const tagsShown = await page.$$eval("#dstGrid .blockbox .tag",
+  (ns) => ns.filter((n) => getComputedStyle(n).visibility === "visible").length);
+check("ブロックのラベルは既定で隠れている", tagsShown <= 1, `${tagsShown}件が表示中`);
+await page.hover("#dstGrid .blockbox >> nth=0");
+check("ホバーでラベルが出る",
+  await page.$eval("#dstGrid .blockbox >> nth=0 >> .tag", (n) => getComputedStyle(n).visibility === "visible"));
+
+// 保存 → 別の手順書に差し替え → 読み戻し
+await page.fill("#scName", "月次テスト");
+await page.click("#scSave");
+await page.fill("#scText", "# 消してよい内容");
+await page.selectOption("#scList", "月次テスト");
+check("保存した手順書を読み戻せる", (await page.inputValue("#scText")).includes("繰り返し 行 = 10, 12, 17"));
+check("保存件数が表示される", /保存済み 1件/.test(await page.textContent("#recipeState")));
+
+// 別ブラウザの人に渡す想定でファイルに書き出す
+const [dl3] = await Promise.all([page.waitForEvent("download"), page.click("#scExport")]);
+check("手順書をファイルに書き出せる", dl3.suggestedFilename() === "月次テスト.txt", dl3.suggestedFilename());
+const exported = join(tmp, "recipe.txt");
+await dl3.saveAs(exported);
+check("書き出した手順書がそのまま読める文章", readFileSync(exported, "utf8").includes("売上明細の{行}行目を続けて置く"));
+
+// 存在しないシートは黙って別シートに逃げず、行番号つきで止まる
+await page.fill("#scText", "存在しないシートのA1:B2を抜粋1のA1に置く");
+await page.click("#scRun");
+await page.waitForTimeout(150);
+check("無いシートは行番号つきで報告される",
+  /1行目.*見つかりません/.test(await page.textContent("#log")), (await page.textContent("#log")).slice(0, 60));
+
+// ---- 10. 外部に一切送信していないことの実測 -----------------------------
+const external = requests.filter((r) => !r.url.startsWith(baseUrl) && !r.url.startsWith("data:") && !r.url.startsWith("blob:"));
+check("ページ取得以外の外部通信が 0 件", external.length === 0,
+  external.slice(0, 3).map((r) => `${r.method} ${r.url}`).join(" | "));
+const nonDoc = requests.filter((r) => r.resourceType !== "document" && r.type !== "document");
+check("画像・スクリプト等の追加取得も 0 件", nonDoc.length === 0,
+  nonDoc.slice(0, 3).map((r) => `${r.type} ${r.url}`).join(" | "));
 
 // ---- 9. Artifact 用の断片も動くか（煙テスト） ---------------------------
 const p2 = await ctx.newPage();
