@@ -953,6 +953,43 @@ function makeGrid(wrap, opts) {
   return G;
 }
 
+/**
+ * ドラッグ中に端へ寄ったら、その方向へ自動でスクロールする（Excel と同じ動き）。
+ * 端からはみ出した距離が大きいほど速く送る。押しっぱなしなら送り続ける。
+ */
+function makeEdgeScroller(wrap, onScrolled) {
+  var raf = 0, pt = null, on = false;
+  var EDGE = 38, MAX = 30;
+  function speed(over) { return Math.min(MAX, 3 + over / 2.2); }
+  function tick() {
+    raf = 0;
+    if (!on || !pt) return;
+    var r = wrap.getBoundingClientRect(), dx = 0, dy = 0;
+    if (pt.x > r.right - EDGE) dx = speed(pt.x - (r.right - EDGE));
+    else if (pt.x < r.left + HW + EDGE) dx = -speed(r.left + HW + EDGE - pt.x);
+    if (pt.y > r.bottom - EDGE) dy = speed(pt.y - (r.bottom - EDGE));
+    else if (pt.y < r.top + HH + EDGE) dy = -speed(r.top + HH + EDGE - pt.y);
+    if (dx || dy) {
+      var sl = wrap.scrollLeft, st = wrap.scrollTop;
+      wrap.scrollLeft = sl + dx;
+      wrap.scrollTop = st + dy;
+      if (wrap.scrollLeft !== sl || wrap.scrollTop !== st) onScrolled(pt);
+    }
+    raf = requestAnimationFrame(tick);
+  }
+  return {
+    move: function (x, y) {
+      pt = { x: x, y: y };
+      on = true;
+      if (!raf) raf = requestAnimationFrame(tick);
+    },
+    stop: function () {
+      on = false; pt = null;
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    }
+  };
+}
+
 /* ============================================================
    3. ブック読み込み
    ============================================================ */
@@ -1131,6 +1168,12 @@ function setSelection(r1, c1, r2, c2, sheet) {
 /* --- マウスでの範囲選択 --- */
 (function () {
   var wrap = $("srcGrid"), dragging = false, anchor = null;
+  // 端まで引っ張ったら、まだ見えていない行・列の方向へ送りながら選択を伸ばす
+  var scroller = makeEdgeScroller(wrap, function (pt) {
+    if (!dragging || !anchor) return;
+    var hit = srcGrid.cellAt(pt.x, pt.y, true);
+    if (hit) setSelection(anchor.r, anchor.c, hit.r, hit.c);
+  });
   wrap.addEventListener("pointerdown", function (e) {
     if (e.button !== 0 || !activeSheet()) return;
     if (e.target.closest(".grab")) return;
@@ -1156,6 +1199,7 @@ function setSelection(r1, c1, r2, c2, sheet) {
   });
   wrap.addEventListener("pointermove", function (e) {
     if (!dragging) return;
+    scroller.move(e.clientX, e.clientY);
     var hit = srcGrid.cellAt(e.clientX, e.clientY, true);
     if (!hit) return;
     setSelection(anchor.r, anchor.c, hit.r, hit.c);
@@ -1163,8 +1207,10 @@ function setSelection(r1, c1, r2, c2, sheet) {
   wrap.addEventListener("pointerup", function (e) {
     if (!dragging) return;
     dragging = false;
+    scroller.stop();
     try { wrap.releasePointerCapture(e.pointerId); } catch (err) {}
   });
+  wrap.addEventListener("pointercancel", function () { dragging = false; scroller.stop(); });
   wrap.addEventListener("keydown", function (e) {
     if (!S.sel) return;
     var g = S.sel, k = e.key, step = e.ctrlKey || e.metaKey ? 10 : 1;
@@ -1475,6 +1521,7 @@ function renderInspector() {
    ============================================================ */
 var dragPayload = null;
 var ghostEl = null;
+var dstScroller = null;
 
 function payloadSize(p) {
   if (p.kind === "range") return { h: p.r2 - p.r1 + 1, w: p.c2 - p.c1 + 1, label: S.sheets[p.sheet].name + "!" + rangeLabel(p) };
@@ -1505,15 +1552,23 @@ function showGhost(r, c, p) {
 function clearGhost() {
   if (ghostEl && ghostEl.parentNode) ghostEl.parentNode.removeChild(ghostEl);
   $("dstGrid").classList.remove("dragover");
+  if (dstScroller) dstScroller.stop();
 }
 
 (function () {
   var wrap = $("dstGrid");
+  // 出力側も、端へ運べば送られる（画面外のセルにも落とせる）
+  dstScroller = makeEdgeScroller(wrap, function (pt) {
+    if (!dragPayload && !S.armed) return;
+    var hit = dstGrid.cellAt(pt.x, pt.y, true);
+    if (hit) showGhost(Math.max(hit.rawR, 0), Math.max(hit.rawC, 0), dragPayload || S.armed);
+  });
   wrap.addEventListener("dragover", function (e) {
     if (!dragPayload) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = dragPayload.kind === "move" ? "move" : "copy";
     wrap.classList.add("dragover");
+    dstScroller.move(e.clientX, e.clientY);
     var hit = dstGrid.cellAt(e.clientX, e.clientY, true);
     if (hit) showGhost(Math.max(hit.rawR, 0), Math.max(hit.rawC, 0), dragPayload);
   });
@@ -1546,9 +1601,11 @@ function clearGhost() {
     S.armed = null;
     wrap.classList.remove("armed");
     $("dstHint").textContent = "ここに置く";
+    clearGhost();
   });
   wrap.addEventListener("pointermove", function (e) {
-    if (!S.armed) return;
+    if (!S.armed) { if (dstScroller) dstScroller.stop(); return; }
+    dstScroller.move(e.clientX, e.clientY);
     var hit = dstGrid.cellAt(e.clientX, e.clientY, true);
     if (hit) showGhost(Math.max(hit.rawR, 0), Math.max(hit.rawC, 0), S.armed);
   });

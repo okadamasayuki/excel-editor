@@ -112,6 +112,32 @@ check("出力グリッドにブロック枠が描かれる", (await page.locator
 check("出力グリッドに値が流し込まれる（5×4=20セル）",
   (await page.$$eval("#dstGrid .gc", (ns) => ns.filter((n) => n.textContent.trim()).length)) === 20);
 
+// ---- 3b. 端まで引っ張ると自動スクロールして隠れた行・列が出る ------------
+const gridBox = await page.locator("#srcGrid").boundingBox();
+const startCell = await cellBox(gc(2, 0));
+await page.mouse.move(startCell.x + 5, startCell.y + 5);
+await page.mouse.down();
+// 右端で保持 → 見えていない列の方向へ送られ続ける
+await page.mouse.move(gridBox.x + gridBox.width - 6, startCell.y + 5, { steps: 6 });
+await page.waitForTimeout(450);
+const scrolledX = await page.evaluate(() => document.getElementById("srcGrid").scrollLeft);
+const selAfterX = await page.evaluate(() => window.__app.S.sel.c2);
+check("右端で引っ張ると横に自動スクロールする", scrolledX > 100, `scrollLeft=${Math.round(scrolledX)}`);
+check("見えていなかった列まで選択が伸びる", selAfterX >= 8, `c2=${selAfterX}`);
+// 下端で保持 → 行方向にも送られる
+await page.mouse.move(gridBox.x + gridBox.width / 2, gridBox.y + gridBox.height - 6, { steps: 6 });
+await page.waitForTimeout(450);
+const scrolledY = await page.evaluate(() => document.getElementById("srcGrid").scrollTop);
+const selAfterY = await page.evaluate(() => window.__app.S.sel.r2);
+check("下端で引っ張ると縦に自動スクロールする", scrolledY > 100, `scrollTop=${Math.round(scrolledY)}`);
+check("見えていなかった行まで選択が伸びる", selAfterY >= 20, `r2=${selAfterY}`);
+await page.mouse.up();
+// 離したら止まる
+const restA = await page.evaluate(() => document.getElementById("srcGrid").scrollTop);
+await page.waitForTimeout(300);
+const restB = await page.evaluate(() => document.getElementById("srcGrid").scrollTop);
+check("離したら自動スクロールが止まる", restA === restB, `${Math.round(restA)} → ${Math.round(restB)}`);
+
 // ---- 4. 範囲入力での選択 + 「出力へ配置」クリック ------------------------
 await page.fill("#refFrom", "A1");
 await page.fill("#refTo", "C3");
