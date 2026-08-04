@@ -360,6 +360,84 @@ await page.click("#blockList .block-card >> nth=0 >> .icon-btn");
 const after = await page.$$eval("#blockList .block-card", (ns) => ns.length);
 check("ブロックを削除できる", after === before - 1, `${before} → ${after}`);
 
+// ---- 7b. 範囲を選んで Delete でまとめて外す ------------------------------
+// 3 つ置いて、そのうち 2 つに掛かる範囲を選んで Delete
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null; A.clearDstSel();
+  A.runScript(`シート追加 まとめて
+売上明細のA1:C3をまとめてのA1に置く
+売上明細のA1:C3をまとめてのA5に置く
+売上明細のA1:C3をまとめてのA20に置く`, true);
+});
+await page.waitForTimeout(250);
+check("3つ置いた", (await page.$$eval("#blockList .block-card", (ns) => ns.length)) === 3);
+// 出力グリッドを触ってから、A1:C8（上の 2 つに掛かる）を選ぶ
+await page.click('#dstGrid .gc[data-r="10"][data-c="0"]');
+await page.evaluate(() => window.__app.setDstSel(0, 0, 7, 2));
+await page.waitForTimeout(120);
+await page.keyboard.press("Delete");
+await page.waitForTimeout(200);
+const leftAfterDel = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
+check("選んだ範囲に掛かるブロックだけ外れる",
+  leftAfterDel.join(",") === "まとめて!A20", leftAfterDel.join(","));
+check("何件外したか知らせる",
+  /ブロック 2 件を外しました/.test(await page.textContent("#toasts")),
+  (await page.textContent("#toasts")).slice(0, 60));
+await page.keyboard.press("Control+z");
+await page.waitForTimeout(200);
+check("Ctrl+Z でまとめて戻せる",
+  (await page.$$eval("#blockList .block-card", (ns) => ns.length)) === 3,
+  String(await page.$$eval("#blockList .block-card", (ns) => ns.length)));
+
+// 何も無い範囲では消さずに知らせる
+await page.evaluate(() => { document.getElementById("toasts").innerHTML = ""; });
+await page.click('#dstGrid .gc[data-r="10"][data-c="0"]');
+await page.evaluate(() => window.__app.setDstSel(9, 0, 12, 2));
+await page.keyboard.press("Delete");
+await page.waitForTimeout(200);
+check("何も無い範囲では消えない",
+  (await page.$$eval("#blockList .block-card", (ns) => ns.length)) === 3);
+check("何も無いことを知らせる",
+  /選んだ範囲にブロックはありません/.test(await page.textContent("#toasts")),
+  (await page.textContent("#toasts")).slice(0, 60));
+
+// 元データ側にいるときは効かない（うっかり消さない）
+await page.evaluate(() => { window.__app.setDstSel(0, 0, 7, 2); });
+await page.click('#srcGrid .gc[data-r="3"][data-c="0"]');
+await page.keyboard.press("Delete");
+await page.waitForTimeout(200);
+check("元データ側での Delete では消えない",
+  (await page.$$eval("#blockList .block-card", (ns) => ns.length)) === 3);
+
+// 範囲を選んでいなくても、選択中のブロックは Delete で外せる
+await page.click('#dstGrid .blockbox >> nth=0');
+await page.evaluate(() => window.__app.clearDstSel());
+await page.waitForTimeout(120);
+await page.keyboard.press("Delete");
+await page.waitForTimeout(200);
+check("選んでいるブロックは Delete で外せる",
+  (await page.$$eval("#blockList .block-card", (ns) => ns.length)) === 2,
+  String(await page.$$eval("#blockList .block-card", (ns) => ns.length)));
+await page.keyboard.press("Control+z");
+await page.waitForTimeout(150);
+
+// 元の状態に戻す
+await page.evaluate(() => { window.__app.clearDstSel(); });
+await loadSampleAgain();
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript(`シート追加 抜粋1
+売上明細のA2:D6を抜粋1のB3に置く
+売上明細のA1:C3を抜粋1のA13に置く
+支店別サマリのA2:C7を抜粋1のF3に置く
+シート追加 集計用
+商品マスタのA1:C7を集計用のB2に置く`, true);
+});
+await page.waitForTimeout(250);
+await page.click("#dstTabsHost .tab >> nth=0");
+
 // ---- 8. スクリーンショット ---------------------------------------------
 mkdirSync(join(root, "test/shots"), { recursive: true });
 await page.screenshot({ path: join(root, "test/shots/light.png") });

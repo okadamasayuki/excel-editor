@@ -1749,6 +1749,7 @@ var pendingCollapse = null;
     if (e.button !== 0 || !activeSheet()) return;
     var hit = srcGrid.cellAt(e.clientX, e.clientY, true);
     if (!hit) return;
+    wrap.focus();          // 出力側の Delete と取り違えないよう、こちらへ焦点を移す
     // 選択の中から押したときは、出力へ運ぶドラッグとして扱う（ブラウザ側の drag に任せる）。
     // 運ばずに離しただけなら、そのセルへ選択を畳む
     if (e.target.closest(".selbox") && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
@@ -2226,6 +2227,33 @@ function removeBlock(id) {
   renderOut(); renderBlockList();
 }
 
+/** そのブロックが出力シート上で占める範囲 */
+function blockRect(b) {
+  var s = rangeSize(b);
+  var h = b.trans ? s.w : s.h, w = b.trans ? s.h : s.w;
+  return { r1: b.dr, c1: b.dc, r2: b.dr + h - 1, c2: b.dc + w - 1 };
+}
+/**
+ * 出力側で選んだ範囲に少しでも重なるブロックを、まとめて外す。
+ * Excel で範囲を選んで Delete を押す感覚に合わせる。
+ */
+function deleteBlocksInSel() {
+  var o = activeOut(), g = S.dsel;
+  if (!o || !g) return 0;
+  var doomed = {};
+  o.blocks.forEach(function (b) {
+    var r = blockRect(b);
+    if (r.r1 <= g.r2 && r.r2 >= g.r1 && r.c1 <= g.c2 && r.c2 >= g.c1) doomed[b.id] = 1;
+  });
+  var n = Object.keys(doomed).length;
+  if (!n) return 0;
+  snapshot();
+  o.blocks = o.blocks.filter(function (b) { return !doomed[b.id]; });
+  if (doomed[S.selBlock]) S.selBlock = null;
+  renderOut(); renderBlockList();
+  return n;
+}
+
 function addBlock(src, dr, dc, outSheet) {
   var o = outSheet || activeOut() || addOutSheet();
   snapshot();
@@ -2390,6 +2418,7 @@ function clearGhost() {
     var hit = dstGrid.cellAt(e.clientX, e.clientY, true);
     if (!hit) return;
     if (overBlock) e.preventDefault();                          // ブラウザ側のドラッグを起こさない
+    wrap.focus();                                               // Delete などのキー操作を受け取れるように
     var cont = outCache;
     var lastR = Math.max(cont.maxR, 0), lastC = Math.max(cont.maxC, 0);
     if (hit.rawR < 0 && hit.rawC >= 0) { setDstSel(0, hit.c, lastR, hit.c); return; }   // 列まるごと
@@ -3373,6 +3402,21 @@ document.addEventListener("keydown", function (e) {
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && e.target === $("srcGrid")) {
     e.preventDefault(); selectAll();
+  }
+  // 出力側にいるときの Delete / BackSpace は、選んだ範囲のブロックを外す
+  if ((e.key === "Delete" || e.key === "Backspace") && !typing
+      && $("scriptModal").hidden                                  // 手順書を開いている間は触らない
+      && document.querySelector(".pane-dst").contains(document.activeElement)) {
+    if (S.dsel) {
+      var n = deleteBlocksInSel();
+      e.preventDefault();
+      toast(n ? "ブロック " + n + " 件を外しました（Ctrl+Zで戻せます）"
+        : "選んだ範囲にブロックはありません", n ? undefined : "wa");
+    } else if (S.selBlock) {
+      e.preventDefault();
+      removeBlock(S.selBlock);
+      toast("ブロックを外しました（Ctrl+Zで戻せます）");
+    }
   }
 });
 
