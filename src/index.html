@@ -865,10 +865,9 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <span class="sep"></span>
         <label class="chk" id="inspTransWrap" title="選んだブロックの行と列を入れ替えます">
           <input type="checkbox" id="inspTrans" disabled> 行列を入れ替える</label>
-        <button class="btn sm" id="inspDel" disabled title="選んだブロックを取り除きます">削除</button>
       </div>
       <div class="gridwrap dst" id="dstGrid" tabindex="0"
-           title="行・列の見出しをクリック、または Shift+ドラッグで範囲を選ぶと、個数や合計が出ます"></div>
+           title="行・列の見出しをクリック、または Shift+ドラッグで範囲を選ぶと、個数や合計が出ます。Delete で、その範囲のブロックをまとめて外せます"></div>
       <div class="dstfoot" id="dstFoot">
         <span class="cellstats" id="dstStats" hidden></span>
       </div>
@@ -2368,12 +2367,11 @@ function renderBlockList() {
   });
 }
 
-/** ブロックを選んでいないときは、向きと削除を押せないようにしておく
+/** ブロックを選んでいないときは、向きを変えられないようにしておく
     （隠すとツールバーの高さが変わって、下のグリッドがずれるため） */
 function renderInspector() {
   var f = S.selBlock ? findBlock(S.selBlock) : null;
   $("inspTrans").disabled = !f;
-  $("inspDel").disabled = !f;
   $("inspTransWrap").classList.toggle("off", !f);
   $("inspTrans").checked = !!(f && f.b.trans);
 }
@@ -3471,7 +3469,6 @@ $("inspTrans").addEventListener("change", function () {
   f.b.trans = this.checked;
   renderOut(); renderBlockList();
 });
-$("inspDel").addEventListener("click", function () { if (S.selBlock) removeBlock(S.selBlock); });
 
 /* --- 手順書パネルの開閉 --- */
 function openScript(open) {

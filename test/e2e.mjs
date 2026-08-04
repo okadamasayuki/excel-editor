@@ -333,27 +333,18 @@ check("件数や貼り付け位置の欄は出さない",
   && (await page.locator("#inspTitle").count()) === 0
   && (await page.locator("#inspEmpty").count()) === 0);
 // 向きと削除はツールバーへ。選ぶまでは押せない
-check("ブロックを選ぶ前は向きと削除が押せない",
-  (await page.isDisabled("#inspTrans")) && (await page.isDisabled("#inspDel")));
-check("向きと削除は保持の設定と同じツールバーにいる", await page.evaluate(() =>
-  document.querySelector(".pane-dst .toolbar").contains(document.getElementById("inspTrans"))
-  && document.querySelector(".pane-dst .toolbar").contains(document.getElementById("inspDel"))));
+check("ブロックを選ぶ前は向きを変えられない", await page.isDisabled("#inspTrans"));
+check("向きの切り替えは保持の設定と同じツールバーにいる", await page.evaluate(() =>
+  document.querySelector(".pane-dst .toolbar").contains(document.getElementById("inspTrans"))));
+check("削除ボタンは無い（Delete キーで外す）", (await page.locator("#inspDel").count()) === 0);
 await page.click("#blockList .block-card >> nth=0");
-check("ブロックを選ぶと押せるようになる",
-  !(await page.isDisabled("#inspTrans")) && !(await page.isDisabled("#inspDel")));
+check("ブロックを選ぶと押せるようになる", !(await page.isDisabled("#inspTrans")));
 await page.click("#inspTrans");
 blocks = await page.$$eval("#blockList .block-card .row2", (ns) => ns.map((n) => n.textContent));
 check("転置が効く", /転置/.test(blocks[0]), blocks[0]);
 await page.keyboard.press("Control+z");
 dest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
 check("Ctrl+Z で戻せる", dest[0] === "抜粋1!B3", dest[0]);
-// ツールバーの削除ボタンでも消せる
-await page.click("#blockList .block-card >> nth=0");
-const beforeDel = await page.$$eval("#blockList .block-card", (ns) => ns.length);
-await page.click("#inspDel");
-check("ツールバーの削除ボタンで消せる",
-  (await page.$$eval("#blockList .block-card", (ns) => ns.length)) === beforeDel - 1);
-await page.keyboard.press("Control+z");
 
 const before = await page.$$eval("#blockList .block-card", (ns) => ns.length);
 await page.click("#blockList .block-card >> nth=0 >> .icon-btn");
