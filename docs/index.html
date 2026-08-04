@@ -2855,18 +2855,42 @@ function maxDestCol(o) {
   });
   return m;
 }
+/**
+ * 実際に値の入っているセルの範囲を調べる。
+ * 空白の列まで「末尾」に数えると、行まるごとの選択（末尾が空欄だらけ）のときに
+ * ずっと右の何も無い場所へ飛んでしまう。
+ * rows を渡すとその行の範囲だけを見る。
+ */
+function contentBounds(o, rows) {
+  var cont = outContent(o), maxR = -1, maxC = -1, minC = Infinity;
+  Object.keys(cont.map).forEach(function (k) {
+    var hit = cont.map[k];
+    if (!hit || !hit.cell || hit.cell.v == null || hit.cell.v === "") return;
+    var p = k.split(","), r = +p[0], c = +p[1];
+    if (rows && (r < rows.r0 || r > rows.r1)) return;
+    if (r > maxR) maxR = r;
+    if (c > maxC) maxC = c;
+    if (c < minC) minC = c;
+  });
+  return { maxR: maxR, maxC: maxC, minC: minC === Infinity ? 0 : minC };
+}
+
 function appendAnchor(o, dir) {
   if (!o || !o.blocks.length) return { r: 0, c: 0 };
   if (dir === "right") {
-    // 直前に置いたものの右隣。無ければ末尾のブロックを基準にする
+    // 直前に置いたものの行を基準に、その行に実際に入っている値の右隣へ
     var last = o.blocks.filter(function (b) { return b.id === S.lastBlockId; })[0]
       || o.blocks[o.blocks.length - 1];
-    var s = rangeSize(last), w = last.trans ? s.h : s.w;
-    return { r: last.dr, c: last.dc + w };
+    var s = rangeSize(last), h = last.trans ? s.w : s.h, w = last.trans ? s.h : s.w;
+    var band = contentBounds(o, { r0: last.dr, r1: last.dr + h - 1 });
+    var c = band.maxC >= 0 ? band.maxC + 1 : last.dc + w;
+    return { r: last.dr, c: c };
   }
-  var left = Infinity;
-  o.blocks.forEach(function (b) { if (b.dc < left) left = b.dc; });
-  return { r: maxDestRow(o) + 1, c: left === Infinity ? 0 : left };
+  var all = contentBounds(o);
+  return {
+    r: (all.maxR >= 0 ? all.maxR : maxDestRow(o)) + 1,
+    c: all.maxR >= 0 ? all.minC : 0
+  };
 }
 /** 選択範囲ぶんの目印。選択が無ければ 1 セルぶんの目印にする */
 function ghostPayload() {

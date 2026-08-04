@@ -793,6 +793,48 @@ await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = n
 await page.click("#btnSample");
 await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
 
+// ---- 9f. 末尾は「値の入っている範囲」で判断する -------------------------
+// 行まるごとの選択は使用範囲いっぱい（末尾は空欄だらけ）になる。
+// 空欄まで末尾に数えると、ずっと右の何も無い場所へ飛んでしまう
+await page.setInputFiles("#fileInput", join(root, "test/fixtures/横長.xlsx"));
+await page.waitForFunction(() => window.__app.S.fileName === "横長.xlsx", { timeout: 20000 });
+const sparse = await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.setSelection(4, 0, 4, 79);                 // 5行目まるごと（値は A〜C の3列だけ）
+  const o = A.S.out[0] || A.S.out[A.S.activeOut];
+  A.addBlock({ sheet: 0, r1: 4, c1: 0, r2: 4, c2: 79 }, 0, 0, o);
+  return A.S.sel.c2;
+});
+check("行まるごとの選択は使用範囲いっぱいになる", sparse === 79, String(sparse));
+await page.click("#btnAppendRight");
+check("末尾の右は値の右隣（空欄は数えない）",
+  /^D1 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
+  await page.textContent("#dstGrid .dropghost .lbl"));
+check("遠くまで飛ばない",
+  (await page.evaluate(() => document.getElementById("dstGrid").scrollLeft)) < 300,
+  String(Math.round(await page.evaluate(() => document.getElementById("dstGrid").scrollLeft))));
+await page.click("#btnAppendDown");
+check("末尾の下も値の下（空欄は数えない）",
+  /^A2 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
+  await page.textContent("#dstGrid .dropghost .lbl"));
+
+// 本当に全列に値がある行なら、これまでどおり右端の続きへ
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.setSelection(0, 0, 0, 79);
+  A.addBlock({ sheet: 0, r1: 0, c1: 0, r2: 0, c2: 79 }, 0, 0, A.S.out[0] || A.S.out[A.S.activeOut]);
+});
+await page.click("#btnAppendRight");
+check("値が全列にある行では右端の続きへ行く",
+  /^CC1 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
+  await page.textContent("#dstGrid .dropghost .lbl"));
+
+await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
+await page.click("#btnSample");
+await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
+
 // ---- 9b. 読み込んだExcelがブラウザに保存されないことの実測 ---------------
 const storage = await page.evaluate(async () => {
   const ls = {};
