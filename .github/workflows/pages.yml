@@ -32,10 +32,10 @@ jobs:
           git diff --exit-code -- docs/ \
             || { echo "::error::docs/ がコミット済みの内容と一致しません。node build.mjs を実行してコミットしてください"; exit 1; }
 
-      # Pages が未設定なら、このステップが有効化する（手作業の設定変更が要らない）
+      # 事前に Settings → Pages → Source を "GitHub Actions" にしておくこと。
+      # enablement で自動作成させることはできない（GITHUB_TOKEN に Pages サイトの
+      # 作成権限がなく、Resource not accessible by integration で落ちる）
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
