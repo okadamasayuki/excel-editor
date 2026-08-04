@@ -835,6 +835,42 @@ await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = n
 await page.click("#btnSample");
 await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
 
+// ---- 9f-2. 横に重ねて 120 列を超えても壊れない -------------------------
+// 描画列数に上限があると、その先の位置が座標を持たず NaN になり、
+// 目印も表示も左上（A1）へ落ちてしまっていた
+await page.setInputFiles("#fileInput", join(root, "test/fixtures/横長.xlsx"));
+await page.waitForFunction(() => window.__app.S.fileName === "横長.xlsx", { timeout: 20000 });
+await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
+const wide = [];
+for (let i = 0; i < 5; i++) {
+  await page.evaluate((n) => {
+    const A = window.__app;
+    const o = A.S.out[A.S.activeOut] || (A.S.out.push({ id: "ow", name: "横並び", blocks: [] }), A.S.out[0]);
+    A.setSelection(1, 0, 1, 29, 0);                       // 30列ぶんの行
+    A.addBlock({ sheet: 0, r1: 1, c1: 0, r2: 1, c2: 29 }, 0, 1 + n * 30, o);
+  }, i);
+  await page.click("#btnAppendRight");
+  wide.push(await page.evaluate(() => {
+    const w = document.getElementById("dstGrid");
+    const g = document.querySelector("#dstGrid .dropghost");
+    return {
+      label: (g.querySelector(".lbl").textContent.match(/^\S+/) || [""])[0],
+      left: g.style.left, scrollLeft: Math.round(w.scrollLeft),
+    };
+  }));
+}
+check("120列を超えても目印の位置が決まる",
+  wide.every((x) => /^\d+px$/.test(x.left)), JSON.stringify(wide.map((x) => x.left)));
+check("120列を超えても左上へ戻らない",
+  wide.every((x) => x.scrollLeft > 1000), JSON.stringify(wide.map((x) => x.scrollLeft)));
+check("末尾は右へ伸び続ける",
+  wide.map((x) => x.label).join(",") === "AF1,BJ1,CN1,DR1,EV1",
+  wide.map((x) => x.label).join(","));
+
+await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
+await page.click("#btnSample");
+await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
+
 // ---- 9g. 画面まわり（折りたたみ・見出し・+ボタン・並べ方） ---------------
 // ヘッダは名前だけ
 const heads = await page.$$eval(".pane-head", (ns) => ns.map((n) => n.textContent.trim()));

@@ -850,7 +850,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
    0. 小道具
    ============================================================ */
 var CW = 96, CH = 26, HW = 52, HH = 26;      // セル幅/高/行見出し幅/列見出し高
-var MAX_COLS = 120;                           // 描画する最大列数
+var MAX_COLS = 16384;                         // 扱う最大列数（Excel と同じ XFD 列まで）
 var BLOCK_HUES = ["#9A6B14", "#1F5FA8", "#2C6E4E", "#7A3E86", "#A6392C", "#166C77"];
 var BLOCK_HUES_D = ["#DFAE5B", "#7CB0EC", "#6FBF93", "#C58CD0", "#E08272", "#63BECB"];
 
@@ -1010,6 +1010,9 @@ function makeGrid(wrap, opts) {
   }
   G.colWidth = function (c) { return G.colX[c + 1] - G.colX[c]; };
   G.rowHeight = function (r) { return G.rowY[r + 1] - G.rowY[r]; };
+  // 範囲外を引くと undefined → NaN が広がって、枠や目印が左上へ落ちる。必ず内側に丸める
+  function cx(c) { return G.colX[clamp(c, 0, G.cols)]; }
+  function cy(r) { return G.rowY[clamp(r, 0, G.rows)]; }
 
   /**
    * 大きさを決める。opts.colW(c) / opts.rowH(r) を渡すと列ごと行ごとに変えられる。
@@ -1157,10 +1160,11 @@ function makeGrid(wrap, opts) {
     return { r: clamp(r, 0, G.rows - 1), c: clamp(c, 0, G.cols - 1), rawR: r, rawC: c };
   };
   G.box = function (g) {
-    var c2 = Math.min(g.c2, G.cols - 1), r2 = Math.min(g.r2, G.rows - 1);
+    var c1 = clamp(g.c1, 0, G.cols - 1), c2 = clamp(g.c2, c1, G.cols - 1);
+    var r1 = clamp(g.r1, 0, G.rows - 1), r2 = clamp(g.r2, r1, G.rows - 1);
     return {
-      left: HW + G.colX[g.c1], top: HH + G.rowY[g.r1],
-      width: G.colX[c2 + 1] - G.colX[g.c1], height: G.rowY[r2 + 1] - G.rowY[g.r1]
+      left: HW + cx(c1), top: HH + cy(r1),
+      width: cx(c2 + 1) - cx(c1), height: cy(r2 + 1) - cy(r1)
     };
   };
   G.markHeaders = function (g) {
@@ -1178,13 +1182,15 @@ function makeGrid(wrap, opts) {
   };
   /** そのセルが真ん中あたりに来るまで動かす（端に張り付かせない） */
   G.centerOn = function (r, c) {
-    var top = HH + G.rowY[r], left = HW + G.colX[c];
+    r = clamp(r, 0, G.rows - 1); c = clamp(c, 0, G.cols - 1);
+    var top = HH + cy(r), left = HW + cx(c);
     var h = G.rowHeight(r) || CH, w = G.colWidth(c) || CW;
     wrap.scrollTop = clamp(top + h / 2 - wrap.clientHeight / 2, 0, Math.max(0, wrap.scrollHeight - wrap.clientHeight));
     wrap.scrollLeft = clamp(left + w / 2 - wrap.clientWidth / 2, 0, Math.max(0, wrap.scrollWidth - wrap.clientWidth));
   };
   G.scrollToCell = function (r, c) {
-    var top = HH + G.rowY[r], left = HW + G.colX[c];
+    r = clamp(r, 0, G.rows - 1); c = clamp(c, 0, G.cols - 1);
+    var top = HH + cy(r), left = HW + cx(c);
     var h = G.rowHeight(r) || CH, w = G.colWidth(c) || CW;
     var fzW = G.colX[G.freeze.c] || 0, fzH = G.rowY[G.freeze.r] || 0;
     if (top - HH - fzH < wrap.scrollTop) wrap.scrollTop = Math.max(0, top - HH - fzH - h);
@@ -1844,7 +1850,11 @@ function renderOut() {
   outCache = cont;
   // 中身が無いシートは先頭から見せる（前のシートの位置を引きずらない）
   if (!o.blocks.length) { $("dstGrid").scrollTop = 0; $("dstGrid").scrollLeft = 0; }
+  // 末尾の続き（+1列/+1行）も必ず入る大きさにしておく
   dstGrid.setSize(Math.max(cont.maxR + 12, 40), Math.max(cont.maxC + 8, 24));
+  if (dstGrid.cols <= cont.maxC + 1 || dstGrid.rows <= cont.maxR + 1) {
+    log("出力が扱える大きさの上限に達しました", "er");
+  }
   dstGrid.refresh();
   renderOutOverlay(cont);
   var n = o.blocks.length;
