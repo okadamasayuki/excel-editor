@@ -702,6 +702,51 @@ const selBox2 = await page.locator("#srcGrid .selbox").boundingBox();
 await page.mouse.click(selBox2.x + 10, selBox2.y + 10);
 const collapsed = await page.textContent("#selInfo");
 check("選択の中をクリックすると1セルになる", /A3:A3|A3\b/.test(collapsed) && /1×1/.test(collapsed), collapsed);
+
+// 1行目に置いたときも、ラベルが列見出しに隠れず全部読めること
+await page.evaluate(() => window.__app.runScript("シート追加 先頭\n書式つきのA2:F2を先頭のA1に置く", true));
+await page.click('#dstGrid .blockbox');
+await page.waitForTimeout(100);
+const topTag = await page.evaluate(() => {
+  const box = document.querySelector("#dstGrid .blockbox");
+  const tag = box.querySelector(".tag");
+  const grid = document.getElementById("dstGrid").getBoundingClientRect();
+  const head = document.querySelector("#dstGrid .gcolh").getBoundingClientRect();
+  const t = tag.getBoundingClientRect();
+  return {
+    below: tag.classList.contains("below"),
+    fullyVisible: t.top >= grid.top - 0.5 && t.bottom <= grid.bottom + 0.5,
+    belowHeader: t.top >= head.bottom - 0.5,
+    height: Math.round(t.height),
+  };
+});
+check("1行目のラベルは下側に出る", topTag.below, JSON.stringify(topTag));
+check("1行目のラベルが見出しに隠れない", topTag.belowHeader && topTag.fullyVisible, JSON.stringify(topTag));
+
+// 上に余裕がある位置なら、これまでどおり上に出る
+await page.evaluate(() => {
+  window.__app.runScript("シート追加 途中\n書式つきのA2:F2を途中のA6に置く", true);
+});
+await page.click('#dstGrid .blockbox');
+await page.waitForTimeout(100);
+const midTag = await page.evaluate(() => {
+  const tag = document.querySelector("#dstGrid .blockbox .tag");
+  const grid = document.getElementById("dstGrid").getBoundingClientRect();
+  const t = tag.getBoundingClientRect();
+  return { below: tag.classList.contains("below"), fullyVisible: t.top >= grid.top - 0.5 };
+});
+check("余裕があればラベルは上のまま", !midTag.below && midTag.fullyVisible, JSON.stringify(midTag));
+
+// 元データ側も同じ（1行目を選んだときのつまみ）
+await selectRange("A1", "C1");
+const grabChip = await page.evaluate(() => {
+  const g = document.querySelector("#srcGrid .selbox .grab");
+  const grid = document.getElementById("srcGrid").getBoundingClientRect();
+  const head = document.querySelector("#srcGrid .gcolh").getBoundingClientRect();
+  const t = g.getBoundingClientRect();
+  return { below: g.classList.contains("below"), belowHeader: t.top >= head.bottom - 0.5 };
+});
+check("元データの1行目のつまみも下側に出る", grabChip.below && grabChip.belowHeader, JSON.stringify(grabChip));
 // 移動先が画面の外なら、そこまで出力側の表示が動く
 await page.evaluate(() => {
   const A = window.__app;
