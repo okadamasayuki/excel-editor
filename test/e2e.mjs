@@ -1768,6 +1768,85 @@ const evened = await page.evaluate(() => ({
 check("ダブルクリックで半分に戻る", Math.abs(evened.src - evened.dst) < 10,
   `${evened.src} / ${evened.dst}`);
 
+// ---- 表示倍率（元データ・出力シートそれぞれ） ----------------------------
+// 固定が残っていると同じセルが 2 つの層に出るので、ここでは外しておく
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.sheets[A.S.active].freeze = null; A.S.sel = null;
+  document.getElementById("srcGrid").scrollTop = 0;
+  document.getElementById("srcGrid").scrollLeft = 0;
+});
+await page.waitForTimeout(200);
+const cellBoxOf = async (grid) => await page.evaluate((g) => {
+  const n = document.querySelector("#" + g + ' .gcells .gc[data-r="2"][data-c="0"]');
+  const r = n.getBoundingClientRect();
+  return { w: Math.round(r.width), h: Math.round(r.height) };
+}, grid);
+
+check("元データ・出力シートの両方に倍率がある",
+  (await page.locator("#zoomSrc").count()) === 1 && (await page.locator("#zoomDst").count()) === 1);
+check("はじめは100%", (await page.textContent("#zoomSrc .zl")) === "100%");
+const z100 = await cellBoxOf("srcGrid");
+await page.click('#zoomSrc button[data-z="1"]');
+await page.waitForTimeout(200);
+const z110 = await cellBoxOf("srcGrid");
+check("＋で大きくなる", (await page.textContent("#zoomSrc .zl")) === "110%" && z110.w > z100.w,
+  `${z100.w} → ${z110.w}`);
+await page.click('#zoomSrc button[data-z="1"]');
+await page.waitForTimeout(200);
+check("さらに＋で125%", (await page.textContent("#zoomSrc .zl")) === "125%");
+
+// 拡大したままでも、狙ったセルを正しく掴める（当たり判定が倍率でずれない）
+await page.click('#srcGrid .gcells .gc[data-r="4"][data-c="2"]');
+await page.waitForTimeout(150);
+const zSel = await page.evaluate(() => window.__app.S.sel);
+check("拡大中でも正しいセルを選べる",
+  zSel.r1 === 4 && zSel.c1 === 2 && zSel.r2 === 4 && zSel.c2 === 2, JSON.stringify(zSel));
+// ドラッグでの範囲選択も
+const zb1 = await page.locator('#srcGrid .gcells .gc[data-r="1"][data-c="0"]').first().boundingBox();
+const zb2 = await page.locator('#srcGrid .gcells .gc[data-r="4"][data-c="2"]').first().boundingBox();
+await page.mouse.move(zb1.x + 10, zb1.y + 6);
+await page.mouse.down();
+await page.mouse.move(zb2.x + 20, zb2.y + 8, { steps: 8 });
+await page.mouse.up();
+const zDrag = await page.evaluate(() => window.__app.S.sel);
+check("拡大中でもドラッグで範囲を選べる",
+  zDrag.r1 === 1 && zDrag.c1 === 0 && zDrag.r2 === 4 && zDrag.c2 === 2, JSON.stringify(zDrag));
+
+// 縮小と、下限で押せなくなること
+await page.evaluate(() => window.__app.setZoom("src", 50, true));
+await page.waitForTimeout(200);
+const z50 = await cellBoxOf("srcGrid");
+check("縮小すると小さくなる", z50.w < z100.w, `${z100.w} → ${z50.w}`);
+check("下限では − が押せない", await page.isDisabled('#zoomSrc button[data-z="-1"]'));
+await page.click('#srcGrid .gcells .gc[data-r="6"][data-c="3"]');
+await page.waitForTimeout(150);
+const zSmall = await page.evaluate(() => window.__app.S.sel);
+check("縮小中でも正しいセルを選べる", zSmall.r1 === 6 && zSmall.c1 === 3, JSON.stringify(zSmall));
+await page.evaluate(() => window.__app.setZoom("src", 200, true));
+await page.waitForTimeout(200);
+check("上限では ＋ が押せない", await page.isDisabled('#zoomSrc button[data-z="1"]'));
+
+// 数字をクリックすると 100% に戻る
+await page.click("#zoomSrc .zl");
+await page.waitForTimeout(200);
+check("数字をクリックで100%に戻る", (await page.textContent("#zoomSrc .zl")) === "100%"
+  && (await cellBoxOf("srcGrid")).w === z100.w);
+
+// 出力側も別々に効く
+const dz100 = await cellBoxOf("dstGrid");
+await page.click('#zoomDst button[data-z="-1"]');
+await page.waitForTimeout(200);
+const dz90 = await cellBoxOf("dstGrid");
+check("出力シートの倍率は別に効く",
+  (await page.textContent("#zoomDst .zl")) === "90%" && dz90.w < dz100.w
+  && (await page.textContent("#zoomSrc .zl")) === "100%", `${dz100.w} → ${dz90.w}`);
+check("倍率はブラウザに覚えておく（値だけ）",
+  /"zoomDst":90/.test(await page.evaluate(() => localStorage.getItem("excel-extract-prefs-v1"))),
+  await page.evaluate(() => localStorage.getItem("excel-extract-prefs-v1")));
+await page.click("#zoomDst .zl");
+await page.waitForTimeout(200);
+
 // 出力シートの全画面表示
 await page.click("#btnMaxDst");
 await page.waitForTimeout(250);
@@ -1864,7 +1943,8 @@ check("localStorage に置くのは画面設定だけ",
   Object.keys(storage.ls).join(","));
 check("画面設定には並べ方と折りたたみしか入らない",
   Object.keys(JSON.parse(storage.ls["excel-extract-prefs-v1"] || "{}"))
-    .every((k) => ["stacked", "foldSheets", "foldBlocks", "rail", "splitW", "splitH"].indexOf(k) >= 0),
+    .every((k) => ["stacked", "foldSheets", "foldBlocks", "rail", "splitW", "splitH",
+      "zoomSrc", "zoomDst"].indexOf(k) >= 0),
   storage.ls["excel-extract-prefs-v1"]);
 check("sessionStorage / Cookie / IndexedDB は未使用",
   Object.keys(storage.ss).length === 0 && storage.cookie === "" && storage.dbs.length === 0,

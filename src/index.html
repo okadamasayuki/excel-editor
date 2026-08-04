@@ -378,6 +378,8 @@ body.stacked .splitter::after {
   overflow: auto; background: var(--surface);
   scrollbar-width: thin;
   --cw: 96px; --ch: 26px; --hw: 52px; --hh: 26px;
+  /* 表示倍率。中の座標は変えずに、見た目だけを拡大・縮小する */
+  zoom: var(--z, 1);
 }
 .gcanvas { position: relative; }
 .gcells, .govl, .gcolh, .growh, .gcorner, .gfrz, .gfrzhead { position: absolute; top: 0; left: 0; }
@@ -435,6 +437,23 @@ body.stacked .splitter::after {
 /* 選択した範囲そのものを掴んで運べるようにする */
 .selbox[draggable="true"] { pointer-events: auto; cursor: grab; }
 .selbox[draggable="true"]:active { cursor: grabbing; }
+
+/* 表示倍率（− 100% ＋） */
+.zoom {
+  display: inline-flex; align-items: stretch; flex: none;
+  border: 1px solid var(--line); border-radius: 100px; overflow: hidden; background: var(--surface);
+}
+.zoom button {
+  border: none; background: transparent; color: var(--ink-2); cursor: pointer;
+  font: inherit; font-size: 12px; line-height: 1; padding: 3px 9px;
+}
+.zoom button:hover:not(:disabled) { background: var(--sunken); color: var(--ink); }
+.zoom button:disabled { opacity: .35; cursor: default; }
+.zoom .zl {
+  min-width: 48px; font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+  font-variant-numeric: tabular-nums; border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+}
+.zoom button:focus-visible { outline: 2px solid var(--src); outline-offset: -2px; }
 
 /* 出力へ持っていった範囲の跡。色は出力側のブロックと同じで、対応が分かる */
 .usedbox {
@@ -863,6 +882,11 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <button class="btn sm" id="btnFreeze" title="選んだセルの上と左でウィンドウ枠を固定します">ここで固定</button>
         <label class="chk" id="hiddenNote" hidden><input type="checkbox" id="optShowHidden"> <span id="hiddenLabel">非表示も表示</span></label>
         <div class="spacer"></div>
+        <span class="zoom" id="zoomSrc" role="group" aria-label="元データの表示倍率">
+          <button type="button" data-z="-1" aria-label="縮小" title="縮小">−</button>
+          <button type="button" class="zl" data-z="0" title="クリックで 100% に戻す">100%</button>
+          <button type="button" data-z="1" aria-label="拡大" title="拡大">＋</button>
+        </span>
       </div>
       <div class="gridwrap src" id="srcGrid" tabindex="0" hidden></div>
       <div class="dropzone" id="dropzone">
@@ -917,6 +941,11 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <span class="sep"></span>
         <label class="chk" id="inspTransWrap" title="選んだブロックの行と列を入れ替えます">
           <input type="checkbox" id="inspTrans" disabled> 行列を入れ替える</label>
+        <span class="zoom" id="zoomDst" role="group" aria-label="出力シートの表示倍率">
+          <button type="button" data-z="-1" aria-label="縮小" title="縮小">−</button>
+          <button type="button" class="zl" data-z="0" title="クリックで 100% に戻す">100%</button>
+          <button type="button" data-z="1" aria-label="拡大" title="拡大">＋</button>
+        </span>
       </div>
       <div class="gridwrap dst" id="dstGrid" tabindex="0"
            title="行・列の見出しをクリック、または Shift+ドラッグで範囲を選ぶと、個数や合計が出ます。Delete で、その範囲のブロックをまとめて外せます"></div>
@@ -1322,7 +1351,9 @@ function makeGrid(wrap, opts) {
   /** 画面座標 → セル座標（見出しの外側は rawR/rawC が -1 になる） */
   G.cellAt = function (clientX, clientY, allowHeader) {
     var rect = wrap.getBoundingClientRect();
-    var xv = clientX - rect.left, yv = clientY - rect.top;
+    // 見た目は zoom で拡大・縮小しているので、画面上の距離を中の座標に戻す
+    var z = G.zoom || 1;
+    var xv = (clientX - rect.left) / z, yv = (clientY - rect.top) / z;
     // 見出しの帯と固定した行・列は画面に貼り付いているので、スクロール量を足さない。
     // 足すと、横スクロール中の行見出しがセル扱いになってしまう
     var fzW = G.colX[G.freeze.c] || 0, fzH = G.rowY[G.freeze.r] || 0;
@@ -1386,19 +1417,20 @@ function makeGrid(wrap, opts) {
 function makeEdgeScroller(wrap, onScrolled) {
   var raf = 0, pt = null, on = false;
   var EDGE = 38, MAX = 30;
+  function zoomOf() { return parseFloat(getComputedStyle(wrap).getPropertyValue("--z")) || 1; }
   function speed(over) { return Math.min(MAX, 3 + over / 2.2); }
   function tick() {
     raf = 0;
     if (!on || !pt) return;
-    var r = wrap.getBoundingClientRect(), dx = 0, dy = 0;
+    var r = wrap.getBoundingClientRect(), dx = 0, dy = 0, z = zoomOf();
     if (pt.x > r.right - EDGE) dx = speed(pt.x - (r.right - EDGE));
-    else if (pt.x < r.left + HW + EDGE) dx = -speed(r.left + HW + EDGE - pt.x);
+    else if (pt.x < r.left + HW * z + EDGE) dx = -speed(r.left + HW * z + EDGE - pt.x);
     if (pt.y > r.bottom - EDGE) dy = speed(pt.y - (r.bottom - EDGE));
-    else if (pt.y < r.top + HH + EDGE) dy = -speed(r.top + HH + EDGE - pt.y);
+    else if (pt.y < r.top + HH * z + EDGE) dy = -speed(r.top + HH * z + EDGE - pt.y);
     if (dx || dy) {
       var sl = wrap.scrollLeft, st = wrap.scrollTop;
-      wrap.scrollLeft = sl + dx;
-      wrap.scrollTop = st + dy;
+      wrap.scrollLeft = sl + dx / z;
+      wrap.scrollTop = st + dy / z;
       if (wrap.scrollLeft !== sl || wrap.scrollTop !== st) onScrolled(pt);
     }
     raf = requestAnimationFrame(tick);
@@ -3416,6 +3448,39 @@ function savePref(k, v) {
   try { localStorage.setItem(PKEY, JSON.stringify(p)); } catch (e) { /* 保存できなくても動く */ }
 }
 
+/* --- 表示倍率（元データ・出力シートそれぞれ） --- */
+var ZOOMS = [50, 67, 75, 90, 100, 110, 125, 150, 200];
+function setZoom(which, pct, remember) {
+  var grid = which === "src" ? srcGrid : dstGrid;
+  var wrap = which === "src" ? $("srcGrid") : $("dstGrid");
+  var i = ZOOMS.indexOf(pct);
+  if (i < 0) pct = 100;
+  grid.zoom = pct / 100;
+  wrap.style.setProperty("--z", grid.zoom);
+  var host = $(which === "src" ? "zoomSrc" : "zoomDst");
+  host.querySelector(".zl").textContent = pct + "%";
+  host.querySelectorAll("button[data-z]").forEach(function (b) {
+    var d = +b.dataset.z;
+    if (d) b.disabled = (d < 0 && pct === ZOOMS[0]) || (d > 0 && pct === ZOOMS[ZOOMS.length - 1]);
+  });
+  if (remember) savePref(which === "src" ? "zoomSrc" : "zoomDst", pct);
+  requestAnimationFrame(function () { grid.refresh(); });
+}
+function stepZoom(which, dir) {
+  var grid = which === "src" ? srcGrid : dstGrid;
+  var now = Math.round((grid.zoom || 1) * 100);
+  if (!dir) return setZoom(which, 100, true);
+  var i = ZOOMS.indexOf(now);
+  if (i < 0) i = ZOOMS.indexOf(100);
+  setZoom(which, ZOOMS[clamp(i + dir, 0, ZOOMS.length - 1)], true);
+}
+["src", "dst"].forEach(function (which) {
+  $(which === "src" ? "zoomSrc" : "zoomDst").addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-z]");
+    if (b) stepZoom(which, +b.dataset.z);
+  });
+});
+
 /** 左レールの各項目を折りたためるようにする */
 function setFold(btnId, open, remember) {
   var btn = $(btnId);
@@ -3970,6 +4035,8 @@ renderBlockList();
   var panesEl = document.querySelector(".panes");
   if (p.splitW > 0) panesEl.style.setProperty("--srcW", p.splitW + "px");
   if (p.splitH > 0) panesEl.style.setProperty("--srcH", p.splitH + "px");
+  setZoom("src", p.zoomSrc || 100, false);
+  setZoom("dst", p.zoomDst || 100, false);
 })();
 
 /* テスト用フック */
@@ -3983,6 +4050,7 @@ window.__app = {
   sheetFullName: sheetFullName, matchSheetName: matchSheetName,
   showLoading: showLoading, setStage: setStage,
   CHEAT: CHEAT, insertLine: insertLine,
+  setZoom: setZoom, stepZoom: stepZoom, ZOOMS: ZOOMS,
   parseCell: parseCell, setMaxSrc: setMaxSrc, setMaxPane: setMaxPane, openHeaderMenu: openHeaderMenu,
   setDstSel: setDstSel, clearDstSel: clearDstSel,
   revealSelection: revealSelection,
