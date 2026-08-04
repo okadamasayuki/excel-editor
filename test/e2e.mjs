@@ -479,8 +479,10 @@ check("繰り返しにすると入力欄が出る", await page.isVisible("#repea
 check("見つけた行番号が入っている", (await page.inputValue("#repeatValues")) === "10",
   await page.inputValue("#repeatValues"));
 check("何をするのか文章で示す",
-  /10行目のところを、どの行で繰り返しますか/.test(await page.textContent("#repeatForm label")),
-  await page.textContent("#repeatForm label"));
+  /10行目のところを、どの行で繰り返しますか/.test(await page.textContent("#repeatLabel")),
+  await page.textContent("#repeatLabel"));
+check("行・列・シートから選べる", await page.evaluate(() =>
+  [...document.querySelectorAll('input[name="repeatKind"]')].map((n) => n.value).join(",")) === "行,列,シート");
 // 繰り返す行を入れて決定
 await page.fill("#repeatValues", "10, 12, 17, 20");
 await page.click("#repeatOk");
@@ -500,6 +502,66 @@ const wrapDest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => n
 check("包んだ手順書がそのまま4周ぶん動く",
   wrapDest.join(",") === "まとめ!A1,まとめ!F1,まとめ!A2,まとめ!F2,まとめ!A3,まとめ!F3,まとめ!A4,まとめ!F4",
   wrapDest.join(","));
+
+// ---- 5c-2. 列とシートの繰り返し ------------------------------------------
+/** 手順書を書いて、種類を選んで、繰り返しにして、実行する */
+const makeRepeat = async (script, kind, values) => {
+  await page.fill("#scText", script);
+  await page.click("#scRepeat");
+  await page.waitForTimeout(120);
+  await page.click(`.rf-kind label:has-text("${kind}")`);
+  await page.waitForTimeout(120);
+  const asked = await page.textContent("#repeatLabel");
+  const preset = await page.inputValue("#repeatValues");
+  if (values != null) await page.fill("#repeatValues", values);
+  await page.click("#repeatOk");
+  await page.waitForTimeout(120);
+  const text = await page.inputValue("#scText");
+  await page.click("#scRun");
+  await page.waitForTimeout(300);
+  const placed = await page.$$eval("#blockList .block-card",
+    (ns) => ns.map((n) => n.querySelector(".src").textContent + "→" + n.querySelector(".row2 .to").textContent));
+  return { asked, preset, text, placed };
+};
+
+// 列：B1:B8 の B が {列} になり、B・C・D の 3 周ぶん置かれる
+const byCol = await makeRepeat(
+  "シート追加 列まとめ\n売上明細のB1:B8を列まとめのA1に置く", "列", "B, C, D");
+check("列の繰り返しでは列名を見つける", /B列のところを、どの列で繰り返しますか/.test(byCol.asked), byCol.asked);
+check("見つけた列名が初期値に入る", byCol.preset === "B", byCol.preset);
+check("列が {列} に置き換わる",
+  /繰り返し 列 = B, C, D\n {2}売上明細の\{列\}1:\{列\}8を列まとめのA1に置く\nここまで/.test(byCol.text),
+  byCol.text.split("\n").filter((l) => /繰り返し|\{列\}|ここまで/.test(l)).join(" / "));
+check("列ぶん置かれる",
+  byCol.placed.join(",") === "売上明細!B1:B8→列まとめ!A1,売上明細!C1:C8→列まとめ!A9,売上明細!D1:D8→列まとめ!A17",
+  byCol.placed.join(","));
+
+// 列は B-E のような範囲でも指定できる
+const byColRange = await makeRepeat(
+  "シート追加 範囲\n売上明細のB1:B4を範囲のA1に置く", "列", "B-D");
+check("列は範囲でも指定できる",
+  byColRange.placed.join(",") === "売上明細!B1:B4→範囲!A1,売上明細!C1:C4→範囲!A5,売上明細!D1:D4→範囲!A9",
+  byColRange.placed.join(","));
+
+// シート：シート名が {シート} になり、開いている 3 シートぶん置かれる
+const bySheet = await makeRepeat(
+  "シート追加 シートまとめ\n売上明細のA1:C3をシートまとめのA1に置く", "シート", null);
+check("シートの繰り返しではシート名を見つける",
+  /「売上明細」のところを、どのシートで繰り返しますか/.test(bySheet.asked), bySheet.asked);
+check("開いているシート名が初期値に入る",
+  bySheet.preset === "売上明細, 支店別サマリ, 商品マスタ", bySheet.preset);
+check("シート名が {シート} に置き換わる",
+  /繰り返し シート = 売上明細, 支店別サマリ, 商品マスタ\n {2}\{シート\}のA1:C3をシートまとめのA1に置く\nここまで/.test(bySheet.text),
+  bySheet.text.split("\n").filter((l) => /繰り返し|\{シート\}|ここまで/.test(l)).join(" / "));
+check("シートぶん置かれる",
+  bySheet.placed.join(",") === "売上明細!A1:C3→シートまとめ!A1,支店別サマリ!A1:C3→シートまとめ!A4,商品マスタ!A1:C3→シートまとめ!A7",
+  bySheet.placed.join(","));
+
+// 手順書の見出しは名前と閉じるだけ
+check("手順書の見出しに説明文は出さない",
+  !/使い回す|Ctrl/.test(await page.textContent(".modal-head")), await page.textContent(".modal-head"));
+check("閉じるは × のボタン", (await page.textContent("#scClose")).trim() === "×",
+  await page.textContent("#scClose"));
 
 // 数字を含むシート名を行番号として巻き込まない
 const guarded = await page.evaluate(() => {
