@@ -523,8 +523,8 @@ check("濃い背景では文字を白くする", textA1 === "rgb(255, 255, 255)"
 check("非表示の列は描かれない", (await page.locator('#srcGrid .gc[data-c="2"]').count()) === 0);
 check("非表示の行は描かれない", (await page.locator('#srcGrid .gc[data-r="3"]').count()) === 0);
 check("非表示があることを知らせる", await page.isVisible("#hiddenNote"));
-check("シート情報に非表示の数が出る",
-  /非表示 1行\/1列/.test(await page.textContent("#srcSheetName")), await page.textContent("#srcSheetName"));
+check("非表示の数がチェックボックスに出る",
+  /非表示（1行\/1列）も表示/.test(await page.textContent("#hiddenNote")), await page.textContent("#hiddenNote"));
 check("非表示の跡に目印が出る", (await page.locator("#srcGrid .after-hidden-c").count()) > 0);
 
 // 「非表示も表示」で見えるようになる
@@ -835,6 +835,73 @@ await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = n
 await page.click("#btnSample");
 await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
 
+// ---- 9g. 画面まわり（折りたたみ・見出し・+ボタン・並べ方） ---------------
+// ヘッダは名前だけ
+const heads = await page.$$eval(".pane-head", (ns) => ns.map((n) => n.textContent.trim()));
+check("ペインの見出しは名前だけになる",
+  /^ブック構成$/.test(heads[0]) && /^元データ/.test(heads[1]) && /^出力シート$/.test(heads[2]),
+  heads.join(" | "));
+check("選択情報はツールバーに移る", await page.isVisible(".toolbar #selInfo"));
+
+// 左レールは項目ごとに折りたためる
+check("最初は開いている", (await page.getAttribute("#foldSheets", "aria-expanded")) === "true");
+check("中身が見えている", await page.isVisible("#sheetList"));
+await page.click("#foldSheets");
+check("折りたたむと中身が隠れる",
+  !(await page.isVisible("#sheetList")) && (await page.getAttribute("#foldSheets", "aria-expanded")) === "false");
+check("項目名は残る", await page.isVisible("#foldSheets"));
+await page.click("#foldBlocks");
+check("抜粋ブロックも折りたためる", !(await page.isVisible("#blockList")));
+await page.click("#foldSheets");
+await page.click("#foldBlocks");
+check("開き直せる", (await page.isVisible("#sheetList")) && (await page.isVisible("#blockList")));
+
+// シートを増やす + ボタン（タブの右隣）
+const tabsBefore = await page.locator("#dstTabsHost .tab").count();
+await page.click("#dstTabsHost .tab-add");
+check("タブの＋で出力シートが増える",
+  (await page.locator("#dstTabsHost .tab").count()) === tabsBefore + 1,
+  `${tabsBefore} → ${await page.locator("#dstTabsHost .tab").count()}`);
+check("＋はタブの右端にある",
+  await page.evaluate(() => {
+    const host = document.getElementById("dstTabsHost");
+    return host.lastElementChild.classList.contains("tab-add");
+  }));
+
+// 左右／上下の並べ替え
+const sideBySide = await page.evaluate(() => {
+  const s = document.querySelector(".pane-src").getBoundingClientRect();
+  const d = document.querySelector(".pane-dst").getBoundingClientRect();
+  return { sameRow: Math.abs(s.top - d.top) < 4, dRight: d.left > s.left };
+});
+check("はじめは左右に並ぶ", sideBySide.sameRow && sideBySide.dRight, JSON.stringify(sideBySide));
+await page.click("#btnLayout");
+await page.waitForTimeout(250);
+const stacked = await page.evaluate(() => {
+  const s = document.querySelector(".pane-src").getBoundingClientRect();
+  const d = document.querySelector(".pane-dst").getBoundingClientRect();
+  return { dBelow: d.top > s.top + 50, sameLeft: Math.abs(s.left - d.left) < 4, label: document.getElementById("btnLayout").textContent };
+});
+check("上下に並べ替えられる", stacked.dBelow && stacked.sameLeft, JSON.stringify(stacked));
+check("ボタンの文言が戻す側になる", /左右に並べる/.test(stacked.label), stacked.label);
+const stackedCells = await page.evaluate(() => {
+  const w = document.getElementById("dstGrid"), G = window.__app.dstGrid;
+  return {
+    gc: w.querySelectorAll(".gc").length, h: w.clientHeight, w: w.clientWidth,
+    win: G.win, rows: G.rows, cols: G.cols,
+    inCells: w.querySelector(".gcells").children.length,
+  };
+});
+check("並べ替えてもセルは描かれている", stackedCells.gc > 10, JSON.stringify(stackedCells));
+await page.click("#btnLayout");
+await page.waitForTimeout(250);
+check("左右に戻せる",
+  await page.evaluate(() => {
+    const s = document.querySelector(".pane-src").getBoundingClientRect();
+    const d = document.querySelector(".pane-dst").getBoundingClientRect();
+    return Math.abs(s.top - d.top) < 4 && d.left > s.left;
+  }));
+
 // ---- 9b. 読み込んだExcelがブラウザに保存されないことの実測 ---------------
 const storage = await page.evaluate(async () => {
   const ls = {};
@@ -845,9 +912,14 @@ const storage = await page.evaluate(async () => {
   try { dbs = (await indexedDB.databases()).map((d) => d.name); } catch (e) { dbs = []; }
   return { ls, ss, cookie: document.cookie, dbs };
 });
-check("localStorage に置くのは手順書だけ",
-  Object.keys(storage.ls).every((k) => k === "excel-extract-recipes-v1"),
+// 置かれるのは手順書と画面の好みだけ（どちらもセルの値は含まない）
+check("localStorage に置くのは手順書と画面設定だけ",
+  Object.keys(storage.ls).every((k) => k === "excel-extract-recipes-v1" || k === "excel-extract-prefs-v1"),
   Object.keys(storage.ls).join(","));
+check("画面設定には並べ方と折りたたみしか入らない",
+  Object.keys(JSON.parse(storage.ls["excel-extract-prefs-v1"] || "{}"))
+    .every((k) => ["stacked", "foldSheets", "foldBlocks"].indexOf(k) >= 0),
+  storage.ls["excel-extract-prefs-v1"]);
 check("sessionStorage / Cookie / IndexedDB は未使用",
   Object.keys(storage.ss).length === 0 && storage.cookie === "" && storage.dbs.length === 0,
   `ss=${Object.keys(storage.ss).length} cookie="${storage.cookie}" idb=${storage.dbs.join(",")}`);

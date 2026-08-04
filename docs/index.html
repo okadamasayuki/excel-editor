@@ -207,8 +207,21 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .pane-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
 
 /* --- 左レール --- */
-.rail-section { border-bottom: 1px solid var(--line-soft); padding: 10px 12px 12px; }
-.rail-section .eyebrow { display: block; margin-bottom: 8px; }
+.rail-section { border-bottom: 1px solid var(--line-soft); padding: 4px 12px 12px; }
+.rail-head {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  background: transparent; border: none; cursor: pointer;
+  padding: 7px 0 8px; margin: 0 0 2px; text-align: left; border-radius: var(--r-sm);
+}
+.rail-head:hover .eyebrow { color: var(--ink); }
+.rail-head .caret {
+  color: var(--muted); font-size: 9px; width: 10px; flex: none;
+  transition: transform .14s ease;
+}
+.rail-head[aria-expanded="false"] .caret { transform: rotate(-90deg); }
+.rail-head[aria-expanded="false"] + * { display: none; }
+.rail-section:has(.rail-head[aria-expanded="false"]) { padding-bottom: 2px; }
+@media (prefers-reduced-motion: reduce) { .rail-head .caret { transition: none; } }
 .sheetlist { display: flex; flex-direction: column; gap: 2px; }
 .sheet-item {
   display: flex; align-items: center; gap: 8px;
@@ -301,6 +314,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .tabs.dst .tab[aria-current="true"]::after { background: var(--dst); }
 .tab .x { color: var(--muted); font-size: 12px; }
 .tab .x:hover { color: var(--bad); }
+/* シートを増やす + ボタン（Excel と同じくタブの右隣） */
+.tab-add {
+  border: none; border-right: 1px solid var(--line); background: transparent;
+  color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1;
+  padding: 4px 12px; flex: none;
+}
+.tab-add:hover { background: var(--sunken); color: var(--dst); }
 
 /* ============================================================
    グリッド
@@ -470,6 +490,15 @@ body.srcmax .panes { grid-template-columns: minmax(0, 1fr); }
 body.srcmax .pane:not(.pane-src) { display: none; }
 body.srcmax .console { display: none; }
 body.srcmax .pane-src { border-left: none; }
+
+/* 元データを上・出力シートを下に並べる配置 */
+body.stacked .panes {
+  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+}
+body.stacked .pane-rail { grid-column: 1; grid-row: 1 / span 2; }
+body.stacked .pane-src { grid-column: 2; grid-row: 1; }
+body.stacked .pane-dst { grid-column: 2; grid-row: 2; border-left: 1px solid var(--line); border-top: 1px solid var(--line); }
 
 .hmenu {
   position: fixed; z-index: 70; min-width: 168px;
@@ -650,6 +679,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
     <div id="fileChip" class="filechip" hidden><span class="dot"></span><b id="fileName"></b><span id="fileMeta" class="mono"></span></div>
     <div class="spacer"></div>
     <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xlsb,.xls,.csv" hidden>
+    <button class="btn ghost" id="btnLayout" title="元データと出力シートの並べ方を切り替えます">⇅ 上下に並べる</button>
     <button class="btn ghost" id="btnSample">サンプルで試す</button>
     <button class="btn" id="btnOpen">ファイルを開く</button>
     <button class="btn primary" id="btnGen" disabled>Excelを生成してダウンロード</button>
@@ -658,17 +688,21 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
   <!-- ============ 3ペイン ============ -->
   <div class="panes">
     <!-- 左レール -->
-    <section class="pane" aria-label="ブック構成">
+    <section class="pane pane-rail" aria-label="ブック構成">
       <div class="pane-head"><span class="eyebrow">ブック構成</span></div>
       <div class="pane-body">
         <div class="rail-section">
-          <span class="eyebrow">シート一覧</span>
+          <button class="rail-head" id="foldSheets" aria-expanded="true" aria-controls="sheetList">
+            <span class="caret">▾</span><span class="eyebrow">シート一覧</span>
+          </button>
           <div class="sheetlist" id="sheetList">
             <p class="empty-note">ファイルを開くとシートが並びます。シート名をつまんで出力側へ落とすと、シート全体をまるごと配置できます。</p>
           </div>
         </div>
         <div class="rail-section">
-          <span class="eyebrow">抜粋ブロック</span>
+          <button class="rail-head" id="foldBlocks" aria-expanded="true" aria-controls="blockList">
+            <span class="caret">▾</span><span class="eyebrow">抜粋ブロック</span>
+          </button>
           <div class="blocklist" id="blockList">
             <p class="empty-note">まだブロックはありません。</p>
           </div>
@@ -680,14 +714,13 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
     <section class="pane pane-src" aria-label="元データ">
       <div class="pane-head">
         <span class="eyebrow" style="color:var(--src)">元データ</span>
-        <span class="hint ellip" id="srcSheetName"></span>
         <div class="spacer"></div>
-        <span class="selinfo none" id="selInfo">未選択</span>
         <button class="btn sm" id="btnMaxSrc" title="元データを画面いっぱいに表示します（Escで戻る）">⤢ 全画面</button>
       </div>
       <div class="toolbar">
+        <span class="selinfo none" id="selInfo">未選択</span>
         <button class="btn sm" id="btnFreeze" title="選んだセルの上と左でウィンドウ枠を固定します">ここで固定</button>
-        <label class="chk" id="hiddenNote" hidden><input type="checkbox" id="optShowHidden"> 非表示も表示</label>
+        <label class="chk" id="hiddenNote" hidden><input type="checkbox" id="optShowHidden"> <span id="hiddenLabel">非表示も表示</span></label>
         <div class="spacer"></div>
         <button class="btn sm" id="btnSelAll" disabled>全体を選択</button>
         <button class="btn sm primary" id="btnPlace" disabled>出力へ配置</button>
@@ -728,12 +761,11 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
     </section>
 
     <!-- 出力 -->
-    <section class="pane" aria-label="出力シート">
+    <section class="pane pane-dst" aria-label="出力シート">
       <div class="pane-head">
         <span class="eyebrow" style="color:var(--dst)">出力シート</span>
-        <span class="hint" id="dstHint">ここに置く</span>
         <div class="spacer"></div>
-        <button class="btn sm" id="btnAddOut">シートを追加</button>
+        <span class="hint" id="dstHint" hidden></span>
       </div>
       <div class="toolbar">
         <div class="field">
@@ -1027,6 +1059,10 @@ function makeGrid(wrap, opts) {
     G.freeze = o.freeze || { r: 0, c: 0 };
     canvas.style.width = (HW + x) + "px";
     canvas.style.height = (HH + y) + "px";
+    // 内容が小さくなったとき、前のスクロール位置が範囲外のまま残ると
+    // 端の 1 列だけを描いた状態になる。ここで収まる範囲へ戻しておく
+    wrap.scrollLeft = Math.min(wrap.scrollLeft, Math.max(0, HW + x - wrap.clientWidth));
+    wrap.scrollTop = Math.min(wrap.scrollTop, Math.max(0, HH + y - wrap.clientHeight));
     G.win = null;
   };
 
@@ -1068,6 +1104,9 @@ function makeGrid(wrap, opts) {
   G.draw = function () {
     var st = wrap.scrollTop, sl = wrap.scrollLeft;
     var vh = wrap.clientHeight, vw = wrap.clientWidth;
+    // 大きさが取れないとき（非表示中や並べ替えの途中）に描くと、狭い範囲だけ描いた
+    // 状態が残ってしまう。描かずに「未描画」に戻し、大きさが決まってから描き直す
+    if (vw < 2 || vh < 2) { G.win = null; return; }
     var fz = G.freeze, fzW = G.colX[fz.c] || 0, fzH = G.rowY[fz.r] || 0;
     var r0 = clamp(findIdx(G.rowY, st - HH, G.rows) - 2, 0, G.rows - 1);
     var r1 = clamp(findIdx(G.rowY, st + vh - HH, G.rows) + 2, 0, G.rows - 1);
@@ -1187,6 +1226,9 @@ function makeGrid(wrap, opts) {
     if (left + w > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = left + w - wrap.clientWidth + 8;
   };
   wrap.addEventListener("scroll", G.schedule, { passive: true });
+  // 並べ方の切り替えや全画面など、外側の都合で大きさが変わっても描き直す。
+  // 呼び出し側の再描画に頼ると、レイアウトが確定する前に描いて中途半端になる
+  if (window.ResizeObserver) new ResizeObserver(G.schedule).observe(wrap);
   return G;
 }
 
@@ -1484,18 +1526,11 @@ function renderSrc() {
   var hidC = 0, hidR = 0, i;
   for (i = 0; i < sh.usedCols; i++) if (sh.colsMeta[i] && sh.colsMeta[i].hidden) hidC++;
   for (i = 0; i < sh.usedRows; i++) if (sh.rowsMeta[i] && sh.rowsMeta[i].hidden) hidR++;
-  var note = "";
-  if (hidC || hidR) {
-    note = "・非表示 " + (hidR ? hidR + "行" : "") + (hidR && hidC ? "/" : "") + (hidC ? hidC + "列" : "");
-  }
-  if (sh.freeze && (sh.freeze.r || sh.freeze.c)) {
-    note += "・固定 " + (sh.freeze.r ? sh.freeze.r + "行" : "") + (sh.freeze.r && sh.freeze.c ? "/" : "")
-      + (sh.freeze.c ? colName(sh.freeze.c - 1) + "列まで" : "");
-  }
-  $("srcSheetName").textContent = sh.name + " — " + sh.usedRows + "行 × " + sh.usedCols + "列" + note
-    + (sh.usedCols > MAX_COLS ? "（表示は" + MAX_COLS + "列まで）" : "");
   $("btnFreeze").textContent = (sh.freeze && (sh.freeze.r || sh.freeze.c)) ? "固定を解除" : "ここで固定";
+  // 非表示があるときだけ、その数を添えて出す
   $("hiddenNote").hidden = !(hidC || hidR);
+  $("hiddenLabel").textContent = "非表示（" + (hidR ? hidR + "行" : "")
+    + (hidR && hidC ? "/" : "") + (hidC ? hidC + "列" : "") + "）も表示";
 }
 
 function renderSrcOverlay() {
@@ -1840,6 +1875,8 @@ function renderOut() {
   $("outName").value = o.name;
   var cont = outContent(o);
   outCache = cont;
+  // 中身が無いシートは先頭から見せる（前のシートの位置を引きずらない）
+  if (!o.blocks.length) { $("dstGrid").scrollTop = 0; $("dstGrid").scrollLeft = 0; }
   dstGrid.setSize(Math.max(cont.maxR + 12, 40), Math.max(cont.maxC + 8, 24));
   dstGrid.refresh();
   renderOutOverlay(cont);
@@ -1880,6 +1917,15 @@ function renderOutTabs() {
     t.addEventListener("dragover", function (e) { e.preventDefault(); S.activeOut = i; renderOut(); });
     host.appendChild(t);
   });
+  // Excel と同じく、タブの右隣で増やせるようにする
+  var add = el("button", "tab-add", "＋");
+  add.title = "出力シートを追加";
+  add.setAttribute("aria-label", "出力シートを追加");
+  add.addEventListener("click", function () {
+    addOutSheet();
+    toast("出力シート「" + activeOut().name + "」を追加しました");
+  });
+  host.appendChild(add);
 }
 
 function renderOutOverlay(cont) {
@@ -2136,7 +2182,7 @@ function clearGhost(force) {
     dropPayload(S.armed, Math.max(hit.rawR, 0), Math.max(hit.rawC, 0));
     S.armed = null;
     wrap.classList.remove("armed");
-    $("dstHint").textContent = "ここに置く";
+    $("dstHint").hidden = true; $("dstHint").textContent = "";
     clearGhost(true);
   });
   wrap.addEventListener("pointermove", function (e) {
@@ -2808,7 +2854,39 @@ $("btnSample2").addEventListener("click", loadSample);
 $("btnSampleDl").addEventListener("click", downloadSample);
 $("btnGen").addEventListener("click", generate);
 $("btnSelAll").addEventListener("click", selectAll);
-$("btnAddOut").addEventListener("click", function () { addOutSheet(); toast("出力シートを追加しました"); });
+/* --- 画面の好み（折りたたみ・並べ方）はこのブラウザに覚えておく --- */
+var PKEY = "excel-extract-prefs-v1";
+function loadPrefs() {
+  try { return JSON.parse(localStorage.getItem(PKEY) || "{}") || {}; } catch (e) { return {}; }
+}
+function savePref(k, v) {
+  var p = loadPrefs();
+  p[k] = v;
+  try { localStorage.setItem(PKEY, JSON.stringify(p)); } catch (e) { /* 保存できなくても動く */ }
+}
+
+/** 左レールの各項目を折りたためるようにする */
+function setFold(btnId, open, remember) {
+  var btn = $(btnId);
+  btn.setAttribute("aria-expanded", String(open));
+  if (remember) savePref(btnId, open);
+}
+["foldSheets", "foldBlocks"].forEach(function (id) {
+  $(id).addEventListener("click", function () {
+    setFold(id, $(id).getAttribute("aria-expanded") !== "true", true);
+  });
+});
+
+/** 元データと出力シートを、左右に並べるか上下に並べるか */
+function setLayout(stacked, remember) {
+  document.body.classList.toggle("stacked", stacked);
+  $("btnLayout").textContent = stacked ? "⇄ 左右に並べる" : "⇅ 上下に並べる";
+  if (remember) savePref("stacked", stacked);
+  requestAnimationFrame(function () { srcGrid.refresh(); dstGrid.refresh(); });
+}
+$("btnLayout").addEventListener("click", function () {
+  setLayout(!document.body.classList.contains("stacked"), true);
+});
 
 /* --- 元データの全画面表示 --- */
 function setMaxSrc(on) {
@@ -2922,7 +3000,7 @@ $("btnPlace").addEventListener("click", function () {
   if (!S.sel) return;
   S.armed = { kind: "range", sheet: S.sel.sheet, r1: S.sel.r1, c1: S.sel.c1, r2: S.sel.r2, c2: S.sel.c2 };
   $("dstGrid").classList.add("armed");
-  $("dstHint").textContent = "置きたいセルをクリック（Escで取消）";
+  $("dstHint").textContent = "置きたいセルをクリック（Escで取消）"; $("dstHint").hidden = false;
   toast("出力シートで置きたいセルをクリックしてください");
 });
 document.addEventListener("keydown", function (e) {
@@ -2933,7 +3011,7 @@ document.addEventListener("keydown", function (e) {
   if (e.key === "Escape" && S.armed) {
     S.armed = null; clearGhost(true);
     $("dstGrid").classList.remove("armed");
-    $("dstHint").textContent = "ここに置く";
+    $("dstHint").hidden = true; $("dstHint").textContent = "";
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !/input|textarea/i.test(e.target.tagName)) {
     e.preventDefault(); undo();
@@ -3100,6 +3178,12 @@ dstGrid.refresh();
 renderExamples();
 renderBlockList();
 renderRecipeList();
+(function applyPrefs() {
+  var p = loadPrefs();
+  setFold("foldSheets", p.foldSheets !== false, false);
+  setFold("foldBlocks", p.foldBlocks !== false, false);
+  setLayout(!!p.stacked, false);
+})();
 log("Excelを読み込むと解析を開始します");
 
 /* テスト用フック */
@@ -3111,7 +3195,8 @@ window.__app = {
   wrapAsRepeat: wrapAsRepeat, commonRowNumber: commonRowNumber,
   loadFile: loadFile, showLoading: showLoading, setStage: setStage,
   parseCell: parseCell, setMaxSrc: setMaxSrc, openHeaderMenu: openHeaderMenu,
-  revealSelection: revealSelection
+  revealSelection: revealSelection,
+  srcGrid: srcGrid, dstGrid: dstGrid
 };
 })();
 </script>
