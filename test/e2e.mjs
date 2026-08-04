@@ -583,8 +583,81 @@ check("包んだ手順書がそのまま4周ぶん動く",
   wrapDest.join(",") === "まとめ!A1,まとめ!F1,まとめ!A2,まとめ!F2,まとめ!A3,まとめ!F3,まとめ!A4,まとめ!F4",
   wrapDest.join(","));
 
+/** 手順書を実行して、置かれた先を「出力!位置」で返す */
+const placedByEarly = async (script) => await page.evaluate((sc) => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript(sc, true);
+  const col = (c) => { let s = "", n = c + 1; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - m - 1) / 26; } return s; };
+  return A.S.out.flatMap((o) => o.blocks.map((b) => o.name + "!" + col(b.dc) + (b.dr + 1)));
+}, script);
+
+// ---- 5b-1. 書き方の一覧 ---------------------------------------------------
+await page.evaluate(() => window.__app.openScript(true));
+check("一覧は最初は閉じている", !(await page.isVisible("#scCheat")));
+await page.click("#scHelp");
+await page.waitForTimeout(120);
+check("「書き方の一覧」で開く", await page.isVisible("#scCheat"));
+check("ボタンの文言が閉じる側になる", (await page.textContent("#scHelp")) === "一覧を閉じる");
+const cheatHeads = await page.$$eval(".cheat h4", (ns) => ns.map((n) => n.textContent));
+check("種類ごとに分かれている",
+  cheatHeads.join(",") === "置く,範囲の書き方,名前をつけて、その隣に置く,繰り返し,シートとファイル,その他",
+  cheatHeads.join(","));
+check("ひととおりの書き方が並ぶ",
+  (await page.locator(".cheat-row").count()) >= 25,
+  String(await page.locator(".cheat-row").count()));
+
+// 行をクリックすると手順書に貼り付く
+await page.fill("#scText", "");
+await page.click('.cheat-row:has-text("シート追加 月次まとめ")');
+await page.click('.cheat-row:has-text("売上明細のA1:D10を続けて置く")');
+check("クリックで手順書に書き足せる",
+  (await page.inputValue("#scText")).trim() === "シート追加 月次まとめ\n売上明細のA1:D10を続けて置く",
+  JSON.stringify(await page.inputValue("#scText")));
+
+// 一覧に書いてある例が、実際に動くこと（説明と実装が食い違わないように）
+const cheatRuns = await page.evaluate(() => {
+  const A = window.__app;
+  // 「置く」形の行だけを取り出し、名前や繰り返しの前後関係を保って一続きに流す
+  const script = [
+    "シート追加 検証",
+    "売上明細のA1:D10を 検証 のB2に置く",
+    "売上明細の3行目を続けて置く",
+    "売上明細の3行目から8行目を右に続けて置く",
+    "売上明細のB列を続けて置く",
+    "売上明細のB列からD列を右に続けて置く",
+    "売上明細の全体を続けて置く",
+    "売上明細のA1を続けて置く",
+    "売上明細のA1:D10を 検証 のB2に置く（転置）",
+    "売上明細のA1:C4を 検証 のA1に置く（名前: 目印）",
+    "支店別サマリのA1:B4を 目印 の右に置く",
+    "商品マスタのA1:C3を 目印 の下に置く",
+    "商品マスタのA1:C3を 目印 の下に1行あけて置く",
+    "繰り返し 行 = 10-12 / 1列あけて横に並べる",
+    "  売上明細の{行}行目を続けて置く",
+    "ここまで",
+  ].join("\n");
+  A.S.out = []; A.S.selBlock = null;
+  const r = A.runScript(script, true);
+  return { applied: r.applied, errors: r.errors.map((e) => e.n + "行目:" + e.msg) };
+});
+check("一覧に載せた書き方が実際に動く", cheatRuns.errors.length === 0, cheatRuns.errors.join(" / "));
+check("すべての行が置かれる", cheatRuns.applied === 16, String(cheatRuns.applied));
+
+// 矢印の書き方も動く
+const arrowRun = await placedByEarly("シート追加 矢印\n売上明細のA1:D10 → 矢印のB2");
+check("矢印の書き方も動く", arrowRun.join(",") === "矢印!B2", arrowRun.join(","));
+
+// 繰り返しの欄を開くと、一覧は畳まれる（画面が狭くならないように）
+await page.click("#scRepeat");
+await page.waitForTimeout(120);
+check("繰り返しの欄を開くと一覧は畳まれる",
+  !(await page.isVisible("#scCheat")) && (await page.textContent("#scHelp")) === "書き方の一覧");
+await page.click("#repeatCancel");
+await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
+
 // ---- 5b-2. 名前をつけて、その右・下に置く（案B） -------------------------
-/** 手順書を実行して、置かれた先を「元!範囲 → 出力!位置」で返す */
+/** 手順書を実行して、置かれた先を「出力!位置」で返す */
 const placedBy = async (script) => await page.evaluate((sc) => {
   const A = window.__app;
   A.S.out = []; A.S.selBlock = null;

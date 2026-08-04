@@ -718,6 +718,35 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
 /* 閉じるの × */
 .btn.iconx { padding: 2px 9px; font-size: 15px; line-height: 1.2; }
 
+/* 手順書に書けることの一覧 */
+.cheat {
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
+  display: flex; flex-direction: column; min-height: 0; max-height: 46vh; overflow: hidden;
+}
+.cheat-head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; flex: none;
+  padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
+  font-size: 12px; font-weight: 700;
+}
+.cheat-body { overflow: auto; padding: 4px 0; }
+.cheat h4 {
+  margin: 0; padding: 9px 12px 4px; font-size: 10.5px; letter-spacing: .1em;
+  color: var(--dst); font-family: var(--font-mono);
+}
+.cheat-row {
+  display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 12px;
+  padding: 5px 12px; align-items: baseline; cursor: pointer; border: none;
+  background: transparent; width: 100%; text-align: left; font: inherit; color: inherit;
+}
+.cheat-row:hover, .cheat-row:focus-visible { background: var(--src-soft); outline: none; }
+.cheat-row .ex {
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cheat-row .ds { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+.cheat-row .ex em { font-style: normal; color: var(--src); font-weight: 700; }
+@media (max-width: 720px) { .cheat-row { grid-template-columns: minmax(0, 1fr); gap: 1px; } }
+
 /* ============================================================
    トースト
    ============================================================ */
@@ -889,6 +918,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <button class="btn sm primary" id="scRun">手順書を実行</button>
         <button class="btn sm" id="scFromBlocks">今の配置から作る</button>
         <button class="btn sm src-accent" id="scRepeat" title="指示行を「繰り返し」で包みます">繰り返しにする</button>
+        <button class="btn sm" id="scHelp" title="手順書に書けることの一覧">書き方の一覧</button>
         <label class="chk"><input type="checkbox" id="scClear" checked> 実行前に出力を空にする</label>
         <span class="sep"></span>
         <button class="btn sm" id="scExport">ファイルに書き出す</button>
@@ -911,6 +941,14 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <button class="btn sm primary" id="repeatOk">この行で繰り返す</button>
         <button class="btn sm" id="repeatCancel">やめる</button>
         <span class="hint" id="repeatHint">カンマ区切り。10-14 のように範囲でも指定できます</span>
+      </div>
+
+      <div class="cheat" id="scCheat" hidden>
+        <div class="cheat-head">
+          <span>手順書に書けること</span>
+          <span class="hint">行をクリックすると、書き方をそのまま貼り付けます</span>
+        </div>
+        <div class="cheat-body" id="cheatBody"></div>
       </div>
 
       <textarea id="scText" class="script" spellcheck="false" placeholder="# 手順書の例（# で始まる行はメモ）
@@ -3179,6 +3217,8 @@ function showRepeatForm(kind) {
     return null;
   }
   $("repeatForm").hidden = false;
+  $("scCheat").hidden = true;
+  $("scHelp").textContent = "書き方の一覧";
   setRepeatKind(t.varName === "列" || t.varName === "シート" ? t.varName : "行");
   var h = REPEAT_HELP[repeatKind()] || REPEAT_HELP["行"];
   // シートは、開いているブックのシート名をそのまま初期値にしておく
@@ -3633,6 +3673,89 @@ $("scFromBlocks").addEventListener("click", function () {
   toast("手順書を作りました。説明を書き足して保存できます");
 });
 
+/* --- 手順書に書けることの一覧 --- */
+var CHEAT = [
+  ["置く", [
+    ["売上明細のA1:D10を 抜粋1 のB2に置く", "元データの範囲を、出力シートの決まった場所へ"],
+    ["売上明細のA1:D10を続けて置く", "直前に置いたものの下へ。列は左端に戻る"],
+    ["売上明細のA1:D10を右に続けて置く", "直前に置いたものの右へ。横に並べたいとき"],
+    ["売上明細のA1:D10を 抜粋1 のB2に置く（転置）", "行と列を入れ替えて置く"],
+    ["売上明細のA1:D10 → 抜粋1のB2", "矢印でも書ける（→ / -> / ⇒ / =>）"]
+  ]],
+  ["範囲の書き方", [
+    ["A1からD10", "セルからセルまで（A1:D10 / A1〜D10 でも同じ）"],
+    ["3行目", "その行まるごと"],
+    ["3行目から8行目", "行の範囲"],
+    ["B列", "その列まるごと"],
+    ["B列からD列", "列の範囲"],
+    ["全体", "そのシートで使われている範囲すべて"],
+    ["A1", "1 セルだけ"]
+  ]],
+  ["名前をつけて、その隣に置く", [
+    ["売上明細のA1:C4を 抜粋1 のA1に置く（名前: 見出し）", "置いたものに名前をつける"],
+    ["支店別サマリのA1:B4を 見出し の右に置く", "名前を指した相手のとなりへ。直前が何でも迷わない"],
+    ["商品マスタのA1:C3を 見出し の下に置く", "同じく下へ（右下・左下・右上も書ける）"],
+    ["商品マスタのA1:C3を 見出し の下に1行あけて置く", "すきまを空ける（2列あけて、なども）"]
+  ]],
+  ["繰り返し", [
+    ["繰り返し 行 = 10, 12, 17, 20", "値の数だけ繰り返す。次の行から「ここまで」まで"],
+    ["繰り返し 行 = 10-14", "10,11,12,13,14 に広がる"],
+    ["繰り返し 列 = B, D, F", "列でも繰り返せる（B-E の範囲も可）"],
+    ["繰り返し シート = 売上明細, 支店別サマリ", "シートでも繰り返せる"],
+    ["売上明細の{行}行目を続けて置く", "{行} が各値に置き換わる（{列}{シート}も同じ）"],
+    ["ここまで", "繰り返しの終わり"],
+    ["繰り返し 行 = 10, 12 / 横に並べる", "1 周ぶんを右へ足していく（既定は縦に積む）"],
+    ["繰り返し 行 = 10, 12 / 1列あけて横に並べる", "すきまを空けて並べる"]
+  ]],
+  ["シートとファイル", [
+    ["シート追加 月次まとめ", "出力シートを用意する。同じ名前があれば使い回す"],
+    ["[売上_2026.xlsx]売上明細のA1:C3を…", "同じ名前のシートが複数のファイルにあるとき、ファイルで選ぶ"]
+  ]],
+  ["その他", [
+    ["生成", "そこまでの結果を Excel として書き出す。手順書の最後に置ける"],
+    ["説明: 支店ごとの月次行を1枚にまとめる", "何をする手順書かのメモ（実行されない）"],
+    ["# 元ファイル: 売上_2026.xlsx", "# で始まる行はメモ。元ファイル名は実行時に照合される"]
+  ]]
+];
+function renderCheat() {
+  var box = $("cheatBody");
+  if (box.childNodes.length) return;
+  CHEAT.forEach(function (grp) {
+    box.appendChild(el("h4", null, grp[0]));
+    grp[1].forEach(function (row) {
+      var b = el("button", "cheat-row");
+      b.type = "button";
+      b.title = "クリックで手順書に貼り付け";
+      var ex = el("span", "ex", row[0]);
+      var ds = el("span", "ds", row[1]);
+      b.appendChild(ex); b.appendChild(ds);
+      b.addEventListener("click", function () { insertLine(row[0]); });
+      box.appendChild(b);
+    });
+  });
+}
+/** 手順書のカーソル位置に 1 行差し込む */
+function insertLine(line) {
+  var ta = $("scText");
+  var v = ta.value, at = ta.selectionStart;
+  var head = v.slice(0, at), tail = v.slice(ta.selectionEnd);
+  if (head && !/\n$/.test(head)) head += "\n";
+  tail = tail.replace(/^\n/, "");              // 押すたびに空行が増えないように
+  var ins = line + "\n";
+  ta.value = head + ins + tail;
+  var pos = head.length + ins.length;          // 次の行の先頭へ
+  ta.focus();
+  ta.setSelectionRange(pos, pos);
+  toast("手順書に書き足しました");
+}
+$("scHelp").addEventListener("click", function () {
+  var box = $("scCheat");
+  renderCheat();
+  box.hidden = !box.hidden;
+  $("scHelp").textContent = box.hidden ? "書き方の一覧" : "一覧を閉じる";
+  if (!box.hidden) hideRepeatForm();
+});
+
 $("scRepeat").addEventListener("click", function () { showRepeatForm(); });
 // 行／列／シートを切り替えたら、その種類で見つけ直して初期値も入れ替える
 Array.prototype.forEach.call(document.querySelectorAll('input[name="repeatKind"]'), function (n) {
@@ -3727,6 +3850,7 @@ window.__app = {
   loadFile: loadFile, loadFiles: loadFiles, removeFile: removeFile, switchFile: switchFile,
   sheetFullName: sheetFullName, matchSheetName: matchSheetName,
   showLoading: showLoading, setStage: setStage,
+  CHEAT: CHEAT, insertLine: insertLine,
   parseCell: parseCell, setMaxSrc: setMaxSrc, setMaxPane: setMaxPane, openHeaderMenu: openHeaderMenu,
   setDstSel: setDstSel, clearDstSel: clearDstSel,
   revealSelection: revealSelection,
