@@ -400,18 +400,6 @@ body.srcmax .splitter { display: none; }
 /* 選択した範囲そのものを掴んで運べるようにする */
 .selbox[draggable="true"] { pointer-events: auto; cursor: grab; }
 .selbox[draggable="true"]:active { cursor: grabbing; }
-.selbox .grab {
-  position: absolute; top: -11px; left: -1.5px;
-  display: flex; align-items: center; gap: 4px;
-  height: 18px; padding: 0 7px; border-radius: 100px 100px 100px 2px;
-  background: var(--src); color: #fff; font-size: 10.5px; font-weight: 700;
-  font-family: var(--font-mono); white-space: nowrap;
-  pointer-events: auto; cursor: grab; box-shadow: var(--shadow-sm);
-}
-:root[data-theme="dark"] .selbox .grab { color: #0E1420; }
-@media (prefers-color-scheme: dark) { .selbox .grab { color: #0E1420; } }
-:root[data-theme="light"] .selbox .grab { color: #fff; }
-.selbox .grab:active { cursor: grabbing; }
 
 /* 出力ブロックのオーバーレイ */
 .blockbox {
@@ -447,7 +435,7 @@ body.srcmax .splitter { display: none; }
 .blockbox.overlap { border-style: dashed; border-color: var(--bad); }
 /* 上に余裕がないとき（1行目や、スクロールで上端に来たとき）はラベルを下側に出す。
    そのままだと列見出しの下に潜って半分以上読めなくなる */
-.blockbox .tag.below, .selbox .grab.below, .dropghost .lbl.below {
+.blockbox .tag.below, .dropghost .lbl.below {
   top: auto; bottom: -11px; border-radius: 2px 100px 100px 100px;
 }
 /* 置いた直後に少しだけ光らせて、どこに入ったか分かるようにする */
@@ -647,13 +635,6 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
 .repeat-form label { font-size: 12px; font-weight: 700; color: var(--src); }
 .repeat-form .inp { width: 200px; }
 
-.log {
-  font-family: var(--font-mono); font-size: 10.5px; color: var(--muted);
-  max-height: 76px; overflow: auto; line-height: 1.6; flex: none;
-}
-.log .ok { color: var(--ok); }
-.log .er { color: var(--bad); }
-
 /* ============================================================
    トースト
    ============================================================ */
@@ -687,8 +668,6 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
   .pane { min-height: 0; }
   .gridwrap { height: 58vh; min-height: 240px; max-height: 58vh; }
   .dropzone { min-height: 340px; }
-  .console { grid-template-columns: 1fr; }
-  .log { text-align: left; }
 }
 </style>
 </head>
@@ -871,7 +850,6 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
   支店別サマリの{行}行目を右に続けて置く
 ここまで"></textarea>
 
-      <div class="log" id="log"></div>
     </div>
   </div>
 
@@ -980,7 +958,6 @@ function toHalf(s) {
     .replace(/[！-～]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); })
     .replace(/　/g, " ");
 }
-function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); }
 
 /* ============================================================
    1. 状態
@@ -1028,7 +1005,7 @@ function undo() {
   S.out = st.out; S.activeOut = st.activeOut; S.seq = st.seq; S.outSeq = st.outSeq;
   S.selBlock = null;
   renderOut(); renderBlockList(); renderSrcOverlay();
-  log("元に戻しました");
+  toast("元に戻しました");
 }
 
 /* ============================================================
@@ -1094,6 +1071,11 @@ function makeGrid(wrap, opts) {
     wrap.scrollLeft = Math.min(wrap.scrollLeft, Math.max(0, HW + x - wrap.clientWidth));
     wrap.scrollTop = Math.min(wrap.scrollTop, Math.max(0, HH + y - wrap.clientHeight));
     G.win = null;
+    // 固定を付けた直後も区切りに合わせる（手前の区切りへ寄せて、隣の列を切らない）
+    if (G.freeze.r || G.freeze.c) {
+      snapPrevL = wrap.scrollLeft + 1; snapPrevT = wrap.scrollTop + 1;
+      G.snapFrozen();
+    }
   };
 
   /** 1 セルぶんの div を作る */
@@ -1148,6 +1130,10 @@ function makeGrid(wrap, opts) {
     frzTop.style.transform = "translateY(" + st + "px)";
     frzLeft.style.transform = "translateX(" + sl + "px)";
     frzCorner.style.transform = "translate(" + sl + "px," + st + "px)";
+    // 固定ぶんの見出しも毎回ここで合わせる。下の描き直しの中でだけ動かしていたころは、
+    // 同じ範囲を描いたままの細かいスクロールで見出しだけ取り残され、
+    // 固定した列の中身と列名が横にずれて見えていた
+    frzHead.style.transform = "translate(" + sl + "px," + st + "px)";
 
     var key = r0 + ":" + r1 + ":" + c0 + ":" + c1 + ":" + fz.r + ":" + fz.c;
     if (G.win === key) return;
@@ -1197,7 +1183,6 @@ function makeGrid(wrap, opts) {
     for (c = 0; c < fz.c; c++) { n = headNode("c", c); if (n) ff.appendChild(n); }
     for (r = 0; r < fz.r; r++) { n = headNode("r", r); if (n) ff.appendChild(n); }
     frzHead.innerHTML = ""; frzHead.appendChild(ff);
-    frzHead.style.transform = "translate(" + sl + "px," + st + "px)";
     if (opts.afterDraw) opts.afterDraw();
   };
   G.refresh = function () { G.win = null; G.draw(); };
@@ -1258,7 +1243,45 @@ function makeGrid(wrap, opts) {
     if (left - HW - fzW < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, left - HW - fzW - w);
     if (left + w > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = left + w - wrap.clientWidth + 8;
   };
-  wrap.addEventListener("scroll", G.schedule, { passive: true });
+  /**
+   * 固定した行・列があるときは、スクロールを区切り目に合わせる。
+   * 半端な位置で止まると固定した列の隣が途中で切れ、見出しは「M」なのに中身は
+   * 前の列の右端だけ、という状態になって見出しと中身がずれて見える。
+   * Excel も枠を固定すると 1 列（1 行）ずつ動くので、それに揃える。
+   * 動かした向きに合わせて次／前の区切りへ送るので、少しずつ動かしても止まらない。
+   */
+  function snapAxis(cur, prev, arr, n, fzOff, max) {
+    if (cur <= 0.5 || cur >= max - 0.5) return cur;
+    var i = findIdx(arr, cur + fzOff, n);
+    var lo = arr[i] - fzOff;
+    if (Math.abs(cur - lo) < 0.5) return cur;              // すでに区切りに乗っている
+    if (cur <= prev) return lo;                            // 左（上）へ動かした → 手前の区切り
+    var hi = (i + 1 <= n ? arr[i + 1] : arr[i]) - fzOff;   // 右（下）へ動かした → 次の区切り
+    return Math.min(hi, max);
+  }
+  var snapPrevL = 0, snapPrevT = 0, snapTimer = 0;
+  G.snapFrozen = function () {
+    var fz = G.freeze;
+    if (!fz || (!fz.r && !fz.c)) { snapPrevL = wrap.scrollLeft; snapPrevT = wrap.scrollTop; return; }
+    if (fz.c) {
+      var maxL = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
+      var l = snapAxis(wrap.scrollLeft, snapPrevL, G.colX, G.cols, G.colX[fz.c] || 0, maxL);
+      if (Math.abs(l - wrap.scrollLeft) >= 0.5) wrap.scrollLeft = l;
+    }
+    if (fz.r) {
+      var maxT = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+      var t = snapAxis(wrap.scrollTop, snapPrevT, G.rowY, G.rows, G.rowY[fz.r] || 0, maxT);
+      if (Math.abs(t - wrap.scrollTop) >= 0.5) wrap.scrollTop = t;
+    }
+    snapPrevL = wrap.scrollLeft; snapPrevT = wrap.scrollTop;
+    G.draw();
+  };
+  wrap.addEventListener("scroll", function () {
+    G.schedule();
+    // 動かしている最中に引き戻すと使いづらいので、手が止まってから合わせる
+    if (snapTimer) clearTimeout(snapTimer);
+    snapTimer = setTimeout(function () { snapTimer = 0; G.snapFrozen(); }, 110);
+  }, { passive: true });
   // 並べ方の切り替えや全画面など、外側の都合で大きさが変わっても描き直す。
   // 呼び出し側の再描画に頼ると、レイアウトが確定する前に描いて中途半端になる
   if (window.ResizeObserver) new ResizeObserver(G.schedule).observe(wrap);
@@ -1355,7 +1378,6 @@ function readWorkbook(data, name) {
   // 新しいブックは必ず左上から見せる（前のファイルのスクロール位置を引きずらない）
   $("srcGrid").scrollTop = 0; $("srcGrid").scrollLeft = 0;
   renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList();   var totalRows = S.sheets.reduce(function (a, s) { return a + s.usedRows; }, 0);
-  log("読み込み: " + name + " (" + S.sheets.length + "シート / 計" + totalRows + "行)", "ok");
   toast(name + " を読み込みました（" + S.sheets.length + "シート）");
   return true;
 }
@@ -1389,7 +1411,6 @@ function showLoadError(msg, sub) {
   setStage(msg, 100);
   $("loadSub").textContent = sub || "別のファイルを選ぶか、Excelで開き直して保存したものをお試しください。";
   $("loadActs").hidden = false;
-  log("読み込み失敗: " + msg, "er");
 }
 /** 読み込めたが中身が怪しいとき。黙って空の表を出さず、はっきり伝える */
 function showLoadWarn(msg, sub) {
@@ -1399,7 +1420,6 @@ function showLoadWarn(msg, sub) {
   setStage(msg, 100);
   $("loadSub").textContent = sub || "";
   $("loadActs").hidden = false;
-  log(msg, "er");
 }
 /** そのシートに中身のあるセルが 1 つでもあるか（大きなブックでも早く判定する） */
 function hasAnyCell(ws) {
@@ -1523,10 +1543,7 @@ var srcGrid = makeGrid($("srcGrid"), {
     }
     return { text: t, cls: cls, style: style };
   },
-  afterDraw: function () {
-    srcGrid.markHeaders(S.sel);
-    placeChips($("srcGrid"), ".selbox", ".grab");
-  }
+  afterDraw: function () { srcGrid.markHeaders(S.sel); }
 });
 
 /** 元データの列幅・行の高さ。非表示は 0（「非表示も表示」なら通常どおり出す） */
@@ -1590,26 +1607,14 @@ function renderSrcOverlay() {
       box.title = "ドラッグして出力シートへ置く";
       box.addEventListener("dragstart", startDrag);
       box.addEventListener("dragend", endDrag);
-
-      var grab = el("div", "grab");
-      grab.draggable = true;
-      grab.innerHTML = "⠿ " + esc(rangeLabel(it.g));
-      grab.title = "ドラッグして出力シートへ置く";
-      grab.addEventListener("dragstart", startDrag);
-      grab.addEventListener("dragend", endDrag);
-      box.appendChild(grab);
     }
     ovl.appendChild(box);
   });
   srcGrid.markHeaders(S.sel);
-  placeChips($("srcGrid"), ".selbox", ".grab");
   updateSelUI();
 }
 
-function updateSelUI() {
-  // 選んだ範囲は、つまみのラベル（⠿ A2:D6）で分かるので、別の表示は出さない
-  $("btnPlace").disabled = !S.sel;
-}
+function updateSelUI() { $("btnPlace").disabled = !S.sel; }
 
 function setSelection(r1, c1, r2, c2, sheet) {
   var g = normRange(r1, c1, r2, c2);
@@ -1639,7 +1644,6 @@ var pendingCollapse = null;
   });
   wrap.addEventListener("pointerdown", function (e) {
     if (e.button !== 0 || !activeSheet()) return;
-    if (e.target.closest(".grab")) return;
     var hit = srcGrid.cellAt(e.clientX, e.clientY, true);
     if (!hit) return;
     // 選択の中から押したときは、出力へ運ぶドラッグとして扱う（ブラウザ側の drag に任せる）。
@@ -1743,8 +1747,6 @@ function openHeaderMenu(kind, i, x, y) {
     sh.freeze = { r: isRow ? i : (fz.r || 0), c: isRow ? (fz.c || 0) : i };
     closeHeaderMenu();
     renderSrc();
-    log("固定: " + (sh.freeze.r ? sh.freeze.r + "行目まで" : "") +
-      (sh.freeze.r && sh.freeze.c ? " / " : "") + (sh.freeze.c ? colName(sh.freeze.c - 1) + "列まで" : ""), "ok");
     toast("スクロールしても " + label + "の" + (isRow ? "上" : "左") + "が残ります");
   });
   hmenuEl.appendChild(b1);
@@ -1752,7 +1754,7 @@ function openHeaderMenu(kind, i, x, y) {
   if (fz.r || fz.c) {
     var b2 = el("button", null, "固定を解除");
     b2.addEventListener("click", function () {
-      sh.freeze = null; closeHeaderMenu(); renderSrc(); log("固定を解除しました");
+      sh.freeze = null; closeHeaderMenu(); renderSrc(); toast("固定を解除しました");
     });
     hmenuEl.appendChild(b2);
   }
@@ -1845,7 +1847,7 @@ function addOutSheet(name, silent) {
   while (used[nm]) { nm = base + "(" + (k++) + ")"; }
   S.out.push({ id: "o" + (S.outSeq++), name: nm, blocks: [] });
   S.activeOut = S.out.length - 1;
-  if (!silent) { reRender(); log("出力シート「" + nm + "」を追加"); }
+  if (!silent) reRender();
   return S.out[S.out.length - 1];
 }
 
@@ -1903,7 +1905,7 @@ function renderOut() {
   // 末尾の続き（+1列/+1行）も必ず入る大きさにしておく
   dstGrid.setSize(Math.max(cont.maxR + 12, 40), Math.max(cont.maxC + 8, 24));
   if (dstGrid.cols <= cont.maxC + 1 || dstGrid.rows <= cont.maxR + 1) {
-    log("出力が扱える大きさの上限に達しました", "er");
+    toast("出力が扱える大きさの上限に達しました", "er");
   }
   dstGrid.refresh();
   renderOutOverlay(cont);
@@ -2100,7 +2102,6 @@ function removeBlock(id) {
   f.sheet.blocks.splice(f.idx, 1);
   if (S.selBlock === id) S.selBlock = null;
   renderOut(); renderBlockList();
-  log("ブロックを削除しました");
 }
 
 function addBlock(src, dr, dc, outSheet) {
@@ -2344,7 +2345,6 @@ function dropPayload(p, r, c) {
     S.selBlock = f.b.id;
     renderOut(); renderBlockList();
     revealBlock(f.b);
-    log("移動: " + rangeLabel(f.b) + " → " + a1(r, c), "ok");
     return;
   }
   var src;
@@ -2355,7 +2355,6 @@ function dropPayload(p, r, c) {
     src = p;
   }
   var b = addBlock(src, r, c);
-  log("配置: " + S.sheets[b.sheet].name + "!" + rangeLabel(b) + " → " + activeOut().name + "!" + a1(r, c), "ok");
   toast(S.sheets[b.sheet].name + "!" + rangeLabel(b) + " を " + a1(r, c) + " に置きました");
 }
 
@@ -2481,13 +2480,7 @@ function execLine(raw, ctx) {
   if (am) anchor = parseCell(am[1]);
   // 繰り返しの 2 周目以降は、位置を書いた行も前の周の下に送る
   // （同じ処理を別の行で繰り返すとき、毎回同じ場所に重ならないように）
-  if (anchor && ctx.shift && ctx.shift[o.id]) {
-    anchor = { r: anchor.r + ctx.shift[o.id], c: anchor.c };
-    if (!ctx.shiftLogged) {
-      ctx.shiftLogged = true;
-      log("繰り返し " + (ctx.loopLabel || "") + ": 位置指定を " + ctx.shift[o.id] + "行下へずらしました");
-    }
-  }
+  if (anchor && ctx.shift && ctx.shift[o.id]) anchor = { r: anchor.r + ctx.shift[o.id], c: anchor.c };
 
   // 元データのシート
   var shHit = matchSheetName(srcTxt);
@@ -2599,13 +2592,11 @@ function runScript(text, clearFirst) {
   // 「# 元ファイル:」と実際に開いているファイルが違うときは注意を出す（別の人が使う想定）
   var fm = /^[#\s]*元ファイル\s*[:：]\s*(.+)$/m.exec(toHalf(text));
   if (fm && S.fileName && fm[1].trim() !== S.fileName) {
-    log("注意: 手順書は「" + fm[1].trim() + "」用です（今は " + S.fileName + "）", "er");
     toast("この手順書は「" + fm[1].trim() + "」用に作られています。シート名が違うと失敗します。", "wa");
   }
 
   var ex = expandScript(text);
   if (ex.errors.length) {
-    ex.errors.forEach(function (e) { log(e.n + "行目: " + e.msg, "er"); });
     toast("手順書に問題があります: " + ex.errors[0].n + "行目 " + ex.errors[0].msg, "er");
     return null;
   }
@@ -2621,8 +2612,6 @@ function runScript(text, clearFirst) {
     else if (st.it !== curIter) {
       curIter = st.it;
       ctx.shift = {};
-      ctx.shiftLogged = false;
-      ctx.loopLabel = st.loop;
       if (curIter > 0) S.out.forEach(function (o) { ctx.shift[o.id] = maxDestRow(o) + 1; });
     }
     var r;
@@ -2640,14 +2629,9 @@ function runScript(text, clearFirst) {
   if (clearFirst) { $("dstGrid").scrollTop = 0; $("dstGrid").scrollLeft = 0; dstGrid.draw(); }
   else if (ctx.last) revealBlock(ctx.last.b);
 
-  errs.slice(0, 6).forEach(function (e) {
-    log(e.n + "行目" + (e.loop ? "(" + e.loop + ")" : "") + ": " + e.msg + " — " + e.text, "er");
-  });
   if (errs.length) {
-    log(applied + "件を配置、" + errs.length + "件が失敗", "er");
     toast(errs.length + "件が失敗しました（" + errs[0].n + "行目: " + errs[0].msg + "）", "er");
   } else {
-    log("手順書を実行: " + applied + "件を配置", "ok");
     toast("手順書どおりに " + applied + "件を配置しました");
   }
   if (ctx.generate && !errs.length) generate();
@@ -2824,7 +2808,6 @@ function wrapAsRepeat(valuesText) {
 
   var cnt = t.to - t.from + 1;
   var n2 = parseValueList(values).length;
-  log(cnt + "行を " + (n2 || 0) + "回ぶんの繰り返しにしました（" + t.varName + " = " + values + "）", "ok");
   toast(cnt + "行を、" + (n2 ? n2 + "回ぶん" : "") + "繰り返しにしました");
   return { from: t.from, count: cnt, varName: t.varName, values: values };
 }
@@ -2912,21 +2895,13 @@ function generate() {
   var out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
   saveBlob(new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), name);
   var n = allBlocks().length;
-  log("生成: " + name + "（" + wb.SheetNames.length + "シート / " + n + "ブロック）", "ok");
   toast(name + " をダウンロードしました");
   window.__lastGenerated = { name: name, sheets: wb.SheetNames.slice(), blocks: n };
 }
 
 /* ============================================================
-   9. ログ・トースト
+   9. トースト
    ============================================================ */
-function log(msg, kind) {
-  var box = $("log");
-  var line = el("div", kind || "");
-  line.textContent = msg;
-  box.insertBefore(line, box.firstChild);
-  while (box.children.length > 30) box.removeChild(box.lastChild);
-}
 function toast(msg, kind) {
   var t = el("div", "toast" + (kind ? " " + kind : ""), msg);
   $("toasts").appendChild(t);
@@ -3073,7 +3048,7 @@ $("btnFreeze").addEventListener("click", function () {
   if (!sh) { toast("先にExcelを読み込んでください", "wa"); return; }
   if (sh.freeze && (sh.freeze.r || sh.freeze.c)) {
     sh.freeze = null;
-    log("固定を解除しました");
+    toast("固定を解除しました");
   } else {
     if (!S.sel) { toast("固定したい位置のセルを選んでから押してください", "wa"); return; }
     if (!S.sel.r1 && !S.sel.c1) {
@@ -3081,15 +3056,12 @@ $("btnFreeze").addEventListener("click", function () {
       return;
     }
     sh.freeze = { r: S.sel.r1, c: S.sel.c1 };
-    log("固定: " + (S.sel.r1 ? S.sel.r1 + "行目まで" : "") + (S.sel.r1 && S.sel.c1 ? " / " : "")
-      + (S.sel.c1 ? colName(S.sel.c1 - 1) + "列まで" : ""), "ok");
     toast("スクロールしても " + a1(S.sel.r1, S.sel.c1) + " の上と左が残ります");
   }
   renderSrc();
 });
 $("optShowHidden").addEventListener("change", function () {
   renderSrc();
-  log("非表示の行・列: " + (this.checked ? "表示する" : "隠す"));
 });
 
 /* --- 出力の末尾へ続けて置く --- */
@@ -3147,7 +3119,6 @@ function gotoAppend(dir) {
   dstGrid.centerOn(at.r, at.c);
   dstGrid.draw();
   S.lastGoto = a1(at.r, at.c);
-  log((dir === "right" ? "末尾の右" : "末尾の下") + " " + S.lastGoto + " へ移動");
   toast(S.lastGoto + " へ移動しました");
 }
 ["Down", "Right"].forEach(function (d) {
@@ -3191,8 +3162,6 @@ $("outName").addEventListener("input", function () {
   o.name = $("outName").value || o.name;
   renderOutTabs(); renderBlockList();
 });
-$("optFormula").addEventListener("change", function () { log("数式の保持: " + (this.checked ? "オン" : "オフ")); });
-$("optMerge").addEventListener("change", function () { log("結合セルの保持: " + (this.checked ? "オン" : "オフ")); });
 
 $("inspAnchor").addEventListener("change", function () {
   var f = S.selBlock ? findBlock(S.selBlock) : null;
@@ -3237,7 +3206,6 @@ $("scFromBlocks").addEventListener("click", function () {
   var cur = $("scText").value.trim();
   if (cur && !confirm("いま書かれている手順書を、今の配置から作り直しますか？")) return;
   $("scText").value = txt;
-  log("今の配置から手順書を作りました", "ok");
   toast("手順書を作りました。説明を書き足して保存できます");
 });
 
@@ -3270,7 +3238,6 @@ $("scImport").addEventListener("change", function (e) {
   fr.onload = function () {
     $("scText").value = String(fr.result);
     openScript(true);
-    log("手順書「" + f.name + "」を読み込みました", "ok");
     toast(f.name + " を読み込みました");
   };
   fr.readAsText(f, "utf-8");
@@ -3316,7 +3283,6 @@ renderBlockList();
   if (p.splitW > 0) panesEl.style.setProperty("--srcW", p.splitW + "px");
   if (p.splitH > 0) panesEl.style.setProperty("--srcH", p.splitH + "px");
 })();
-log("Excelを読み込むと解析を開始します");
 
 /* テスト用フック */
 window.__app = {
