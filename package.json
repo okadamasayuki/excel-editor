@@ -1,0 +1,11 @@
+{
+  "name": "excel-editor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Excel を読み込み、範囲を選んで出力シートに配置し、抜粋した Excel を書き出すブラウザツール",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node build.mjs && node test/e2e.mjs"
+  }
+}
