@@ -398,6 +398,78 @@ await page.waitForTimeout(150);
 check("無いシートは行番号つきで報告される",
   /1行目.*見つかりません/.test(await page.textContent("#log")), (await page.textContent("#log")).slice(0, 60));
 
+// ---- 9c. 読み込み中の表示 ------------------------------------------------
+// 大きめのブックを作って、読み込み中に状態が出ることを確かめる
+const bigRows = [["日付", "支店", "商品", "数量", "金額"]];
+for (let i = 0; i < 40000; i++) bigRows.push([`2026-01-${(i % 28) + 1}`, `支店${i % 20}`, `商品${i % 50}`, i % 9, i * 137]);
+const bigWb = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(bigWb, XLSX.utils.aoa_to_sheet(bigRows), "大量データ");
+const bigPath = join(tmp, "大きい売上.xlsx");
+writeFileSync(bigPath, XLSX.write(bigWb, { bookType: "xlsx", type: "buffer" }));
+
+// 表示が出た瞬間を取りこぼさないよう、変化を監視してから読み込ませる
+await page.evaluate(() => {
+  window.__seen = [];
+  const box = document.getElementById("loading");
+  const rec = () => { if (!box.hidden) window.__seen.push(document.getElementById("loadStage").textContent); };
+  new MutationObserver(rec).observe(box, { attributes: true, subtree: true, childList: true, characterData: true });
+  rec();
+});
+await page.setInputFiles("#fileInput", bigPath);
+await page.waitForFunction(() => window.__app.S.fileName === "大きい売上.xlsx", { timeout: 30000 });
+const seen = await page.evaluate(() => window.__seen);
+check("読み込み中の表示が出る", seen.length > 0, seen.slice(0, 4).join(" → "));
+check("「解析中」の段階が出る", seen.some((s) => /解析中/.test(s)), seen.join(" → "));
+check("ファイル名が出る", (await page.textContent("#loadName")) === "大きい売上.xlsx");
+check("終わったら表示が消える", await page.evaluate(() => document.getElementById("loading").hidden));
+check("大きいブックも読める（4万行）",
+  (await page.evaluate(() => window.__app.S.sheets[0].usedRows)) === 40001,
+  String(await page.evaluate(() => window.__app.S.sheets[0].usedRows)));
+
+// 解析できないファイル（画像など）は、はっきりエラーとして出す
+const junkPath = join(tmp, "こわれたブック.xlsx");
+writeFileSync(junkPath, Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5, 6, 7, 8]));
+await page.setInputFiles("#fileInput", junkPath);
+await page.waitForSelector("#loading:not([hidden]) .acts:not([hidden])", { timeout: 10000 });
+check("壊れたファイルはエラーとして出る",
+  /解析できませんでした/.test(await page.textContent("#loadStage")),
+  await page.textContent("#loadStage"));
+check("エラーの理由も出す", /PNG|spreadsheet/i.test(await page.textContent("#loadSub")),
+  await page.textContent("#loadSub"));
+check("エラー時は閉じるボタンが出る", await page.isVisible("#loadClose"));
+await page.click("#loadClose");
+check("閉じるで消える", await page.evaluate(() => document.getElementById("loading").hidden));
+
+// 中身が空のファイルは、SheetJS が例外を出さず 1 セルのブックとして通してしまう。
+// 黙って空の表を出さず、警告として伝えること
+const emptyPath = join(tmp, "からっぽ.xlsx");
+writeFileSync(emptyPath, "");
+await page.setInputFiles("#fileInput", emptyPath);
+await page.waitForSelector("#loading:not([hidden]) .acts:not([hidden])", { timeout: 10000 });
+check("中身が空のファイルは警告として伝える",
+  /データが1件も見つかりませんでした/.test(await page.textContent("#loadStage")),
+  await page.textContent("#loadStage"));
+check("空ファイルで既存のブックを失わない",
+  (await page.evaluate(() => window.__app.S.fileName)) === "大きい売上.xlsx",
+  await page.evaluate(() => window.__app.S.fileName));
+await page.click("#loadClose");
+
+// 拡張子が対象外なら、読み込む前にはっきり伝える
+const txtPath = join(tmp, "メモ.pdf");
+writeFileSync(txtPath, "dummy");
+await page.setInputFiles("#fileInput", txtPath);
+await page.waitForSelector("#loading:not([hidden])", { timeout: 5000 });
+check("対象外の拡張子はその場で伝える",
+  /Excelファイルではないようです/.test(await page.textContent("#loadStage")),
+  await page.textContent("#loadStage"));
+check("読み込み済みのブックは壊されない",
+  (await page.evaluate(() => window.__app.S.fileName)) === "大きい売上.xlsx");
+await page.click("#loadClose");
+
+// あとの検証のためサンプルに戻す
+await page.click("#btnSample");
+await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
+
 // ---- 9b. 読み込んだExcelがブラウザに保存されないことの実測 ---------------
 const storage = await page.evaluate(async () => {
   const ls = {};

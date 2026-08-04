@@ -194,7 +194,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   grid-template-columns: 232px minmax(0,1fr) minmax(0,1fr);
   min-height: 0;
 }
-.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); position: relative; }
 .pane + .pane { border-left: 1px solid var(--line); }
 /* 折り返さない = 選択内容が変わっても高さが動かない（ドラッグ中のズレ防止） */
 .pane-head {
@@ -436,6 +436,46 @@ button, input, select, textarea { font: inherit; color: inherit; }
 body.filedrag .dropzone, body.filedrag .gridwrap { box-shadow: 0 0 0 2px var(--src) inset; }
 
 /* ============================================================
+   読み込み中の表示
+   ============================================================ */
+.loading {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
+}
+.loading-card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg); padding: 18px 22px 16px; width: 320px; max-width: 100%;
+}
+.loading-card .row { display: flex; align-items: center; gap: 10px; }
+.loading-card .nm {
+  font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.loading-card .stage { font-size: 12px; color: var(--ink-2); margin-top: 8px; }
+.loading-card .sub { font-size: 11px; color: var(--muted); margin-top: 5px; line-height: 1.6; }
+.spinner {
+  flex: none; width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--src);
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.bar {
+  height: 5px; background: var(--sunken); border-radius: 3px;
+  overflow: hidden; margin-top: 9px;
+}
+.bar > i { display: block; height: 100%; width: 0; background: var(--src); transition: width .15s ease; }
+.bar.indet > i { width: 40%; animation: slide 1.1s ease-in-out infinite; }
+@keyframes slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+.loading.error .spinner { animation: none; border-color: var(--bad); border-top-color: var(--bad); }
+.loading.warn .spinner { animation: none; border-color: var(--warn); border-top-color: var(--warn); }
+.loading.error .bar, .loading.warn .bar { display: none; }
+.loading-card .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+  .bar.indet > i { animation: none; width: 100%; opacity: .5; }
+}
+
+/* ============================================================
    インスペクタ
    ============================================================ */
 .inspector {
@@ -619,6 +659,21 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         </div>
       </div>
       <div class="tabs" id="srcTabs"></div>
+
+      <div class="loading" id="loading" hidden aria-live="polite">
+        <div class="loading-card">
+          <div class="row">
+            <span class="spinner" id="loadSpin"></span>
+            <span class="nm" id="loadName"></span>
+          </div>
+          <div class="stage" id="loadStage">読み込み中…</div>
+          <div class="bar" id="loadBarWrap"><i id="loadBar"></i></div>
+          <div class="sub" id="loadSub"></div>
+          <div class="acts" id="loadActs" hidden>
+            <button class="btn sm" id="loadClose">閉じる</button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- 出力 -->
@@ -1009,10 +1064,21 @@ function readWorkbook(data, name) {
   try {
     wb = XLSX.read(data, { type: "array", cellStyles: true, cellDates: true, cellNF: true });
   } catch (e) {
-    toast("ファイルを読み込めませんでした: " + e.message, "er");
-    return;
+    showLoadError("Excelとして解析できませんでした", String(e && e.message || e));
+    return false;
   }
-  if (!wb.SheetNames.length) { toast("シートが見つかりませんでした", "er"); return; }
+  if (!wb.SheetNames.length) {
+    showLoadError("シートが1つもありませんでした", "空のブックのようです。");
+    return false;
+  }
+  // SheetJS は中身の無いファイルでも例外を出さず 1 セルのブックを返す。
+  // 黙って空の表に差し替えると、開いていたブックまで失われるので、ここで止める
+  if (!wb.SheetNames.some(function (nm) { return hasAnyCell(wb.Sheets[nm]); })) {
+    showLoadWarn("データが1件も見つかりませんでした",
+      "Excelファイルではないか、中身が空の可能性があります。"
+      + (S.wb ? "いま開いているブックはそのままです。" : "ファイルの形式をご確認ください。"));
+    return false;
+  }
 
   S.wb = wb; S.fileName = name;
   S.sheets = wb.SheetNames.map(function (nm) {
@@ -1040,15 +1106,100 @@ function readWorkbook(data, name) {
   $("btnSelAll").disabled = false;
 
   renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList(); renderExamples();
-  log("読み込み: " + name + " (" + S.sheets.length + "シート)", "ok");
-  toast(name + " を読み込みました");
+  var totalRows = S.sheets.reduce(function (a, s) { return a + s.usedRows; }, 0);
+  log("読み込み: " + name + " (" + S.sheets.length + "シート / 計" + totalRows + "行)", "ok");
+  toast(name + " を読み込みました（" + S.sheets.length + "シート）");
+  return true;
+}
+
+/* --- 読み込み中の表示 --- */
+function fmtSize(n) {
+  if (!n && n !== 0) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
+  return (n / 1024 / 1024).toFixed(1) + " MB";
+}
+function showLoading(name, size) {
+  $("loadName").textContent = name;
+  $("loadSub").textContent = size ? fmtSize(size) : "";
+  $("loadActs").hidden = true;
+  $("loading").classList.remove("error");
+  $("loading").hidden = false;
+}
+/** pct が null なら進み具合の分からない表示にする */
+function setStage(text, pct) {
+  $("loadStage").textContent = text;
+  var wrap = $("loadBarWrap");
+  if (pct == null) { wrap.classList.add("indet"); $("loadBar").style.width = ""; }
+  else { wrap.classList.remove("indet"); $("loadBar").style.width = Math.max(0, Math.min(100, pct)) + "%"; }
+}
+function hideLoading() { $("loading").hidden = true; }
+function showLoadError(msg, sub) {
+  $("loading").hidden = false;
+  $("loading").classList.remove("warn");
+  $("loading").classList.add("error");
+  setStage(msg, 100);
+  $("loadSub").textContent = sub || "別のファイルを選ぶか、Excelで開き直して保存したものをお試しください。";
+  $("loadActs").hidden = false;
+  log("読み込み失敗: " + msg, "er");
+}
+/** 読み込めたが中身が怪しいとき。黙って空の表を出さず、はっきり伝える */
+function showLoadWarn(msg, sub) {
+  $("loading").hidden = false;
+  $("loading").classList.remove("error");
+  $("loading").classList.add("warn");
+  setStage(msg, 100);
+  $("loadSub").textContent = sub || "";
+  $("loadActs").hidden = false;
+  log(msg, "er");
+}
+/** そのシートに中身のあるセルが 1 つでもあるか（大きなブックでも早く判定する） */
+function hasAnyCell(ws) {
+  for (var k in ws) { if (k.charAt(0) !== "!") return true; }
+  return false;
+}
+/**
+ * 画面を 1 回描かせてから重い処理に入る。
+ * Excel の解析は同期処理で画面が固まるので、先に「解析中」を出しておかないと
+ * 表示が変わらないまま固まったように見えてしまう。
+ */
+function afterPaint(fn) {
+  requestAnimationFrame(function () {
+    requestAnimationFrame(function () { setTimeout(fn, 0); });
+  });
 }
 
 function loadFile(file) {
   if (!file) return;
+  var okExt = /\.(xlsx|xlsm|xlsb|xls|csv|txt)$/i.test(file.name);
+  showLoading(file.name, file.size);
+  setStage("ファイルを読み込み中…", 0);
+  if (!okExt) {
+    showLoadError("Excelファイルではないようです（" + file.name + "）",
+      ".xlsx / .xlsm / .xlsb / .xls / .csv に対応しています。");
+    return;
+  }
+
   var fr = new FileReader();
-  fr.onload = function () { readWorkbook(new Uint8Array(fr.result), file.name); };
-  fr.onerror = function () { toast("ファイルの読み取りに失敗しました", "er"); };
+  fr.onprogress = function (e) {
+    if (e.lengthComputable) setStage("ファイルを読み込み中…", e.loaded / e.total * 100);
+  };
+  fr.onload = function () {
+    var buf = fr.result;
+    setStage("Excelを解析中…", null);
+    $("loadSub").textContent = fmtSize(file.size) + "・大きいファイルは少し時間がかかります";
+    // 「解析中」を実際に画面へ出してから、重い解析に入る
+    afterPaint(function () {
+      var ok = false;
+      try { ok = readWorkbook(new Uint8Array(buf), file.name); }
+      catch (err) { showLoadError("解析できませんでした", String(err && err.message || err)); return; }
+      if (ok) hideLoading();
+    });
+  };
+  fr.onerror = function () {
+    showLoadError("ファイルを読み取れませんでした",
+      "ファイルが移動・削除されたか、アクセスできない可能性があります。");
+  };
   fr.readAsArrayBuffer(file);
 }
 
@@ -2271,6 +2422,7 @@ function toast(msg, kind) {
 $("btnOpen").addEventListener("click", function () { $("fileInput").click(); });
 $("btnOpen2").addEventListener("click", function () { $("fileInput").click(); });
 $("fileInput").addEventListener("change", function (e) { loadFile(e.target.files[0]); e.target.value = ""; });
+$("loadClose").addEventListener("click", hideLoading);
 $("btnSample").addEventListener("click", loadSample);
 $("btnSample2").addEventListener("click", loadSample);
 $("btnSampleDl").addEventListener("click", downloadSample);
@@ -2478,7 +2630,8 @@ window.__app = {
   setSelection: setSelection, addBlock: addBlock, generate: generate, parseRangeText: parseRangeText,
   execLine: execLine, expandScript: expandScript, runScript: runScript,
   scriptFromBlocks: scriptFromBlocks, parseValueList: parseValueList,
-  wrapAsRepeat: wrapAsRepeat, commonRowNumber: commonRowNumber
+  wrapAsRepeat: wrapAsRepeat, commonRowNumber: commonRowNumber,
+  loadFile: loadFile, showLoading: showLoading, setStage: setStage
 };
 })();
 </script>
