@@ -18,7 +18,12 @@ const load = (name) => {
   throw new Error(`${name} が見つかりません`);
 };
 const { chromium } = load("playwright");
-const XLSX = load(join(root, "vendor/xlsx.full.min.js"));
+// vendor は CommonJS。package.json が "type": "module" なので明示的に評価して読み込む
+const XLSX = (() => {
+  const m = { exports: {} };
+  new Function("module", "exports", readFileSync(join(root, "vendor/xlsx.full.min.js"), "utf8"))(m, m.exports);
+  return m.exports;
+})();
 
 const tmp = join(root, ".tmp-test");
 rmSync(tmp, { recursive: true, force: true });
