@@ -312,8 +312,16 @@ button, input, select, textarea { font: inherit; color: inherit; }
   --cw: 96px; --ch: 26px; --hw: 52px; --hh: 26px;
 }
 .gcanvas { position: relative; }
-.gcells, .govl, .gcolh, .growh, .gcorner { position: absolute; top: 0; left: 0; }
+.gcells, .govl, .gcolh, .growh, .gcorner, .gfrz, .gfrzhead { position: absolute; top: 0; left: 0; }
+.gfrzhead { z-index: 9; }
 .govl { pointer-events: none; z-index: 6; }
+/* 固定した行・列。スクロールに合わせて位置を戻すことで貼り付いて見える。
+   中のセルは見出し幅を含んだ絶対座標を持つので、層は必ず左上 (0,0) から始める。
+   境界線は box-shadow で描く（border だと内側が削れて最後の行が欠ける） */
+.gfrz { z-index: 5; overflow: hidden; background: var(--surface); }
+.gfrz-top { width: 100%; box-shadow: 0 2px 0 0 var(--src-line); }
+.gfrz-left { height: 100%; box-shadow: 2px 0 0 0 var(--src-line); }
+.gfrz-corner { z-index: 7; box-shadow: 2px 0 0 0 var(--src-line), 0 2px 0 0 var(--src-line); }
 .gcolh { z-index: 8; height: var(--hh); }
 .growh { z-index: 8; width: var(--hw); }
 .gcorner { z-index: 9; width: var(--hw); height: var(--hh); background: var(--panel); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -339,6 +347,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .gh:hover { background: var(--sunken); color: var(--ink); }
 .gh.on { background: var(--src-soft); color: var(--src); }
 .gridwrap.dst .gh.on { background: var(--dst-soft); color: var(--dst); }
+/* 非表示の行・列があった場所の目印（Excel の二重線にあたる） */
+.gc.after-hidden-c, .gh.after-hidden-c { border-left: 2px solid var(--warn); }
+.gc.after-hidden-r, .gh.after-hidden-r { border-top: 2px solid var(--warn); }
 
 /* 選択オーバーレイ */
 .selbox {
@@ -637,6 +648,8 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
           <input class="inp w-ref" id="refTo" placeholder="D10" aria-label="終了セル">
         </div>
         <button class="btn sm src-accent" id="btnApplyRef">範囲を選択</button>
+        <button class="btn sm" id="btnFreeze" title="選んだセルの上と左でウィンドウ枠を固定します">ここで固定</button>
+        <label class="chk" id="hiddenNote" hidden><input type="checkbox" id="optShowHidden"> 非表示も表示</label>
         <div class="spacer"></div>
         <button class="btn sm" id="btnSelAll" disabled>全体を選択</button>
         <button class="btn sm primary" id="btnPlace" disabled>出力へ配置</button>
@@ -689,6 +702,8 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
           <label for="outName">シート名</label>
           <input class="inp w-name" id="outName" value="抜粋1">
         </div>
+        <button class="btn sm" id="btnAppendDown" disabled title="出力の末尾の下に、選択範囲をそのまま続けます">↓ 末尾の下へ</button>
+        <button class="btn sm" id="btnAppendRight" disabled title="出力の末尾の右に、選択範囲を横に並べます">→ 末尾の右へ</button>
         <div class="spacer"></div>
         <label class="chk"><input type="checkbox" id="optFormula"> 数式を保持</label>
         <label class="chk"><input type="checkbox" id="optMerge" checked> 結合セルを保持</label>
@@ -912,68 +927,156 @@ function makeGrid(wrap, opts) {
   var canvas = el("div", "gcanvas");
   var cells = el("div", "gcells");
   var ovl = el("div", "govl");
+  var frzTop = el("div", "gfrz gfrz-top");
+  var frzLeft = el("div", "gfrz gfrz-left");
+  var frzCorner = el("div", "gfrz gfrz-corner");
   var colh = el("div", "gcolh");
   var rowh = el("div", "growh");
+  var frzHead = el("div", "gfrzhead");   // 固定した行・列の見出し（縦横どちらにも追従する）
   var corner = el("div", "gcorner");
   canvas.appendChild(cells); canvas.appendChild(ovl);
-  canvas.appendChild(colh); canvas.appendChild(rowh); canvas.appendChild(corner);
+  canvas.appendChild(frzTop); canvas.appendChild(frzLeft); canvas.appendChild(frzCorner);
+  canvas.appendChild(colh); canvas.appendChild(rowh);
+  canvas.appendChild(frzHead); canvas.appendChild(corner);
   wrap.innerHTML = ""; wrap.appendChild(canvas);
 
   var G = {
     wrap: wrap, canvas: canvas, overlay: ovl,
     rows: 0, cols: 0, render: opts.render || function () { return {}; },
-    win: null, raf: 0
+    win: null, raf: 0,
+    colX: [0], rowY: [0],          // 左端/上端からの累積位置。幅 0 が非表示にあたる
+    freeze: { r: 0, c: 0 }
   };
 
-  G.setSize = function (rows, cols) {
+  /** arr の中で v 以下に収まる最大の添字（幅 0 が続く場合は最後のものを返す） */
+  function findIdx(arr, v, max) {
+    var lo = 0, hi = max;
+    while (lo < hi) {
+      var mid = (lo + hi + 1) >> 1;
+      if (arr[mid] <= v) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+  }
+  G.colWidth = function (c) { return G.colX[c + 1] - G.colX[c]; };
+  G.rowHeight = function (r) { return G.rowY[r + 1] - G.rowY[r]; };
+
+  /**
+   * 大きさを決める。opts.colW(c) / opts.rowH(r) を渡すと列ごと行ごとに変えられる。
+   * 0 を返した列・行は非表示（Excel の「非表示」と同じ見え方になる）。
+   */
+  G.setSize = function (rows, cols, o) {
+    o = o || {};
     G.rows = Math.max(rows, 1); G.cols = Math.min(Math.max(cols, 1), MAX_COLS);
-    canvas.style.width = (HW + G.cols * CW) + "px";
-    canvas.style.height = (HH + G.rows * CH) + "px";
+    var i, x = 0, y = 0;
+    G.colX = new Array(G.cols + 1); G.colX[0] = 0;
+    for (i = 0; i < G.cols; i++) { x += o.colW ? o.colW(i) : CW; G.colX[i + 1] = x; }
+    G.rowY = new Array(G.rows + 1); G.rowY[0] = 0;
+    for (i = 0; i < G.rows; i++) { y += o.rowH ? o.rowH(i) : CH; G.rowY[i + 1] = y; }
+    G.freeze = o.freeze || { r: 0, c: 0 };
+    canvas.style.width = (HW + x) + "px";
+    canvas.style.height = (HH + y) + "px";
     G.win = null;
   };
+
+  /** 1 セルぶんの div を作る */
+  function cellNode(r, c) {
+    var w = G.colWidth(c), h = G.rowHeight(r);
+    if (w <= 0 || h <= 0) return null;
+    var d = G.render(r, c) || {};
+    var cls = "gc" + (d.cls ? " " + d.cls : "");
+    if (c > 0 && G.colWidth(c - 1) === 0) cls += " after-hidden-c";
+    if (r > 0 && G.rowHeight(r - 1) === 0) cls += " after-hidden-r";
+    var n = el("div", cls, d.text || "");
+    n.style.cssText = "left:" + (HW + G.colX[c]) + "px;top:" + (HH + G.rowY[r])
+      + "px;width:" + w + "px;height:" + h + "px;" + (d.style || "");
+    if (d.text) n.title = d.text;
+    n.dataset.r = r; n.dataset.c = c;
+    return n;
+  }
+  function headNode(kind, i) {
+    var n, cls = "gh";
+    if (kind === "c") {
+      var w = G.colWidth(i);
+      if (w <= 0) return null;
+      if (i > 0 && G.colWidth(i - 1) === 0) cls += " after-hidden-c";
+      n = el("div", cls, colName(i));
+      n.style.cssText = "left:" + (HW + G.colX[i]) + "px;top:0;width:" + w + "px;height:" + HH + "px;";
+      n.dataset.c = i;
+    } else {
+      var h = G.rowHeight(i);
+      if (h <= 0) return null;
+      if (i > 0 && G.rowHeight(i - 1) === 0) cls += " after-hidden-r";
+      n = el("div", cls, String(i + 1));
+      n.style.cssText = "left:0;top:" + (HH + G.rowY[i]) + "px;width:" + HW + "px;height:" + h + "px;";
+      n.dataset.r = i;
+    }
+    return n;
+  }
+
   G.draw = function () {
     var st = wrap.scrollTop, sl = wrap.scrollLeft;
     var vh = wrap.clientHeight, vw = wrap.clientWidth;
-    var r0 = clamp(Math.floor((st - HH) / CH) - 4, 0, G.rows - 1);
-    var r1 = clamp(Math.ceil((st + vh - HH) / CH) + 4, 0, G.rows - 1);
-    var c0 = clamp(Math.floor((sl - HW) / CW) - 2, 0, G.cols - 1);
-    var c1 = clamp(Math.ceil((sl + vw - HW) / CW) + 2, 0, G.cols - 1);
+    var fz = G.freeze, fzW = G.colX[fz.c] || 0, fzH = G.rowY[fz.r] || 0;
+    var r0 = clamp(findIdx(G.rowY, st - HH, G.rows) - 2, 0, G.rows - 1);
+    var r1 = clamp(findIdx(G.rowY, st + vh - HH, G.rows) + 2, 0, G.rows - 1);
+    var c0 = clamp(findIdx(G.colX, sl - HW, G.cols) - 1, 0, G.cols - 1);
+    var c1 = clamp(findIdx(G.colX, sl + vw - HW, G.cols) + 1, 0, G.cols - 1);
     colh.style.transform = "translateY(" + st + "px)";
     rowh.style.transform = "translateX(" + sl + "px)";
     corner.style.transform = "translate(" + sl + "px," + st + "px)";
-    var key = r0 + ":" + r1 + ":" + c0 + ":" + c1;
+    frzTop.style.transform = "translateY(" + st + "px)";
+    frzLeft.style.transform = "translateX(" + sl + "px)";
+    frzCorner.style.transform = "translate(" + sl + "px," + st + "px)";
+
+    var key = r0 + ":" + r1 + ":" + c0 + ":" + c1 + ":" + fz.r + ":" + fz.c;
     if (G.win === key) return;
     G.win = key;
 
-    var f = document.createDocumentFragment(), r, c, d, n;
+    var f = document.createDocumentFragment(), r, c, n;
     for (r = r0; r <= r1; r++) {
       for (c = c0; c <= c1; c++) {
-        d = G.render(r, c) || {};
-        n = el("div", "gc" + (d.cls ? " " + d.cls : ""), d.text || "");
-        n.style.cssText = "left:" + (HW + c * CW) + "px;top:" + (HH + r * CH) + "px;width:" + CW + "px;height:" + CH + "px;";
-        if (d.style) n.style.cssText += d.style;
-        if (d.text) n.title = d.text;
-        n.dataset.r = r; n.dataset.c = c;
-        f.appendChild(n);
+        n = cellNode(r, c);
+        if (n) f.appendChild(n);
       }
     }
     cells.innerHTML = ""; cells.appendChild(f);
 
-    var fh = document.createDocumentFragment();
-    for (c = c0; c <= c1; c++) {
-      n = el("div", "gh", colName(c));
-      n.style.cssText = "left:" + (HW + c * CW) + "px;top:0;width:" + CW + "px;height:" + HH + "px;";
-      n.dataset.c = c; fh.appendChild(n);
+    // 固定した行・列は、スクロールに合わせて位置を戻す層に別途描く
+    frzTop.style.height = (HH + fzH) + "px";
+    frzLeft.style.width = (HW + fzW) + "px";
+    frzCorner.style.width = (HW + fzW) + "px";
+    frzCorner.style.height = (HH + fzH) + "px";
+    frzTop.hidden = !fz.r; frzLeft.hidden = !fz.c; frzCorner.hidden = !(fz.r && fz.c);
+    if (fz.r) {
+      f = document.createDocumentFragment();
+      for (r = 0; r < fz.r; r++) for (c = c0; c <= c1; c++) { n = cellNode(r, c); if (n) f.appendChild(n); }
+      frzTop.innerHTML = ""; frzTop.appendChild(f);
     }
+    if (fz.c) {
+      f = document.createDocumentFragment();
+      for (r = r0; r <= r1; r++) for (c = 0; c < fz.c; c++) { n = cellNode(r, c); if (n) f.appendChild(n); }
+      frzLeft.innerHTML = ""; frzLeft.appendChild(f);
+    }
+    if (fz.r && fz.c) {
+      f = document.createDocumentFragment();
+      for (r = 0; r < fz.r; r++) for (c = 0; c < fz.c; c++) { n = cellNode(r, c); if (n) f.appendChild(n); }
+      frzCorner.innerHTML = ""; frzCorner.appendChild(f);
+    }
+
+    var fh = document.createDocumentFragment();
+    for (c = Math.max(c0, fz.c); c <= c1; c++) { n = headNode("c", c); if (n) fh.appendChild(n); }
     colh.innerHTML = ""; colh.appendChild(fh);
 
     var fr = document.createDocumentFragment();
-    for (r = r0; r <= r1; r++) {
-      n = el("div", "gh", String(r + 1));
-      n.style.cssText = "left:0;top:" + (HH + r * CH) + "px;width:" + HW + "px;height:" + CH + "px;";
-      n.dataset.r = r; fr.appendChild(n);
-    }
+    for (r = Math.max(r0, fz.r); r <= r1; r++) { n = headNode("r", r); if (n) fr.appendChild(n); }
     rowh.innerHTML = ""; rowh.appendChild(fr);
+
+    // 固定ぶんの見出しは、縦にも横にも動かない層へ
+    var ff = document.createDocumentFragment();
+    for (c = 0; c < fz.c; c++) { n = headNode("c", c); if (n) ff.appendChild(n); }
+    for (r = 0; r < fz.r; r++) { n = headNode("r", r); if (n) ff.appendChild(n); }
+    frzHead.innerHTML = ""; frzHead.appendChild(ff);
+    frzHead.style.transform = "translate(" + sl + "px," + st + "px)";
     if (opts.afterDraw) opts.afterDraw();
   };
   G.refresh = function () { G.win = null; G.draw(); };
@@ -981,39 +1084,44 @@ function makeGrid(wrap, opts) {
     if (G.raf) return;
     G.raf = requestAnimationFrame(function () { G.raf = 0; G.draw(); });
   };
-  /** 画面座標 → セル座標（見出しの外側は -1 を返す） */
+  /** 画面座標 → セル座標（見出しの外側は rawR/rawC が -1 になる） */
   G.cellAt = function (clientX, clientY, allowHeader) {
     var rect = wrap.getBoundingClientRect();
     var x = clientX - rect.left + wrap.scrollLeft - HW;
     var y = clientY - rect.top + wrap.scrollTop - HH;
-    var c = Math.floor(x / CW), r = Math.floor(y / CH);
     if (!allowHeader && (x < 0 || y < 0)) return null;
+    var c = x < 0 ? -1 : findIdx(G.colX, x, G.cols);
+    var r = y < 0 ? -1 : findIdx(G.rowY, y, G.rows);
     return { r: clamp(r, 0, G.rows - 1), c: clamp(c, 0, G.cols - 1), rawR: r, rawC: c };
   };
   G.box = function (g) {
+    var c2 = Math.min(g.c2, G.cols - 1), r2 = Math.min(g.r2, G.rows - 1);
     return {
-      left: HW + g.c1 * CW, top: HH + g.r1 * CH,
-      width: (g.c2 - g.c1 + 1) * CW, height: (g.r2 - g.r1 + 1) * CH
+      left: HW + G.colX[g.c1], top: HH + G.rowY[g.r1],
+      width: G.colX[c2 + 1] - G.colX[g.c1], height: G.rowY[r2 + 1] - G.rowY[g.r1]
     };
   };
   G.markHeaders = function (g) {
-    var i, ns = colh.children;
-    for (i = 0; i < ns.length; i++) {
-      var c = +ns[i].dataset.c;
-      ns[i].classList.toggle("on", !!g && c >= g.c1 && c <= g.c2);
-    }
-    ns = rowh.children;
-    for (i = 0; i < ns.length; i++) {
-      var r = +ns[i].dataset.r;
-      ns[i].classList.toggle("on", !!g && r >= g.r1 && r <= g.r2);
-    }
+    [colh, rowh, frzHead].forEach(function (layer) {
+      var ns = layer.children;
+      for (var i = 0; i < ns.length; i++) {
+        var n = ns[i], on = false;
+        if (g) {
+          if (n.dataset.c !== undefined) { var c = +n.dataset.c; on = c >= g.c1 && c <= g.c2; }
+          else { var r = +n.dataset.r; on = r >= g.r1 && r <= g.r2; }
+        }
+        n.classList.toggle("on", on);
+      }
+    });
   };
   G.scrollToCell = function (r, c) {
-    var top = HH + r * CH, left = HW + c * CW;
-    if (top - HH < wrap.scrollTop) wrap.scrollTop = Math.max(0, top - HH - CH);
-    if (top + CH > wrap.scrollTop + wrap.clientHeight) wrap.scrollTop = top + CH - wrap.clientHeight + 8;
-    if (left - HW < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, left - HW - CW);
-    if (left + CW > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = left + CW - wrap.clientWidth + 8;
+    var top = HH + G.rowY[r], left = HW + G.colX[c];
+    var h = G.rowHeight(r) || CH, w = G.colWidth(c) || CW;
+    var fzW = G.colX[G.freeze.c] || 0, fzH = G.rowY[G.freeze.r] || 0;
+    if (top - HH - fzH < wrap.scrollTop) wrap.scrollTop = Math.max(0, top - HH - fzH - h);
+    if (top + h > wrap.scrollTop + wrap.clientHeight) wrap.scrollTop = top + h - wrap.clientHeight + 8;
+    if (left - HW - fzW < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, left - HW - fzW - w);
+    if (left + w > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = left + w - wrap.clientWidth + 8;
   };
   wrap.addEventListener("scroll", G.schedule, { passive: true });
   return G;
@@ -1091,7 +1199,8 @@ function readWorkbook(data, name) {
       name: nm, ws: ws,
       rows: Math.min(rg.e.r + 1, 200000), cols: Math.min(rg.e.c + 1, MAX_COLS),
       usedRows: rg.e.r + 1, usedCols: rg.e.c + 1,
-      merges: ws["!merges"] || [], colsMeta: ws["!cols"] || []
+      merges: ws["!merges"] || [], colsMeta: ws["!cols"] || [], rowsMeta: ws["!rows"] || [],
+      freeze: null
     };
   });
   S.active = 0; S.sel = null; S.extras = [];
@@ -1249,6 +1358,14 @@ function downloadSample() {
 /* ============================================================
    4. 元データの描画
    ============================================================ */
+/** 塗りつぶし色が明るいか（暗ければ文字を白くする） */
+function isLightRgb(hex) {
+  var n = parseInt(hex.slice(-6), 16);
+  if (isNaN(n)) return true;
+  var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 150;
+}
+
 var srcGrid = makeGrid($("srcGrid"), {
   render: function (r, c) {
     var sh = activeSheet();
@@ -1257,20 +1374,60 @@ var srcGrid = makeGrid($("srcGrid"), {
     if (!cell) return { cls: "blank" };
     var t = cell.w != null ? cell.w : (cell.v != null ? String(cell.v) : "");
     var cls = cell.t === "n" ? "num" : (cell.t === "b" ? "bool" : "");
-    if (r === 0) cls += " hdrrow";
-    return { text: t, cls: cls };
+    var style = "";
+    // Excel の塗りつぶしをそのまま出す
+    var s = cell.s;
+    if (s && s.patternType && s.patternType !== "none" && s.fgColor && s.fgColor.rgb) {
+      var rgb = String(s.fgColor.rgb).slice(-6);
+      style = "background:#" + rgb + ";";
+      if (!isLightRgb(rgb)) style += "color:#fff;";
+    }
+    return { text: t, cls: cls, style: style };
   },
   afterDraw: function () { srcGrid.markHeaders(S.sel); }
 });
 
+/** 元データの列幅・行の高さ。非表示は 0（「非表示も表示」なら通常どおり出す） */
+function srcMetrics(sh) {
+  var showHidden = $("optShowHidden").checked;
+  return {
+    colW: function (c) {
+      var m = sh.colsMeta[c];
+      if (m && m.hidden && !showHidden) return 0;
+      var w = m && (m.wpx || (m.wch && m.wch * 7));
+      return w ? clamp(Math.round(w), 30, 400) : CW;
+    },
+    rowH: function (r) {
+      var m = sh.rowsMeta[r];
+      if (m && m.hidden && !showHidden) return 0;
+      return CH;
+    },
+    freeze: sh.freeze || { r: 0, c: 0 }
+  };
+}
+
 function renderSrc() {
   var sh = activeSheet();
   if (!sh) return;
-  srcGrid.setSize(Math.max(sh.usedRows + 20, 40), Math.max(sh.usedCols + 6, 26));
+  srcGrid.setSize(Math.max(sh.usedRows + 20, 40), Math.max(sh.usedCols + 6, 26), srcMetrics(sh));
   srcGrid.refresh();
   renderSrcOverlay();
-  $("srcSheetName").textContent = sh.name + " — " + sh.usedRows + "行 × " + sh.usedCols + "列"
+
+  var hidC = 0, hidR = 0, i;
+  for (i = 0; i < sh.usedCols; i++) if (sh.colsMeta[i] && sh.colsMeta[i].hidden) hidC++;
+  for (i = 0; i < sh.usedRows; i++) if (sh.rowsMeta[i] && sh.rowsMeta[i].hidden) hidR++;
+  var note = "";
+  if (hidC || hidR) {
+    note = "・非表示 " + (hidR ? hidR + "行" : "") + (hidR && hidC ? "/" : "") + (hidC ? hidC + "列" : "");
+  }
+  if (sh.freeze && (sh.freeze.r || sh.freeze.c)) {
+    note += "・固定 " + (sh.freeze.r ? sh.freeze.r + "行" : "") + (sh.freeze.r && sh.freeze.c ? "/" : "")
+      + (sh.freeze.c ? colName(sh.freeze.c - 1) + "列まで" : "");
+  }
+  $("srcSheetName").textContent = sh.name + " — " + sh.usedRows + "行 × " + sh.usedCols + "列" + note
     + (sh.usedCols > MAX_COLS ? "（表示は" + MAX_COLS + "列まで）" : "");
+  $("btnFreeze").textContent = (sh.freeze && (sh.freeze.r || sh.freeze.c)) ? "固定を解除" : "ここで固定";
+  $("hiddenNote").hidden = !(hidC || hidR);
 }
 
 function renderSrcOverlay() {
@@ -1313,10 +1470,14 @@ function updateSelUI() {
     $("refFrom").value = a1(S.sel.r1, S.sel.c1);
     $("refTo").value = a1(S.sel.r2, S.sel.c2);
     $("btnPlace").disabled = false;
+    $("btnAppendDown").disabled = false;
+    $("btnAppendRight").disabled = false;
   } else {
     info.classList.add("none");
     info.textContent = "未選択";
     $("btnPlace").disabled = true;
+    $("btnAppendDown").disabled = true;
+    $("btnAppendRight").disabled = true;
   }
 }
 
@@ -1606,6 +1767,7 @@ function addBlock(src, dr, dc, outSheet) {
   };
   o.blocks.push(b);
   S.selBlock = b.id;
+  S.lastBlockId = b.id;      // 「末尾の右へ」の基準
   reRender();
   return b;
 }
@@ -2443,6 +2605,81 @@ function applyRefInputs() {
   srcGrid.scrollToCell(a.r, a.c);
   log("範囲を選択: " + rangeLabel(S.sel));
 }
+
+/* --- ウィンドウ枠の固定 / 非表示の表示 --- */
+$("btnFreeze").addEventListener("click", function () {
+  var sh = activeSheet();
+  if (!sh) { toast("先にExcelを読み込んでください", "wa"); return; }
+  if (sh.freeze && (sh.freeze.r || sh.freeze.c)) {
+    sh.freeze = null;
+    log("固定を解除しました");
+  } else {
+    if (!S.sel) { toast("固定したい位置のセルを選んでから押してください", "wa"); return; }
+    if (!S.sel.r1 && !S.sel.c1) {
+      toast("A1 では固定できません。固定したい行・列の1つ下・1つ右のセルを選んでください", "wa");
+      return;
+    }
+    sh.freeze = { r: S.sel.r1, c: S.sel.c1 };
+    log("固定: " + (S.sel.r1 ? S.sel.r1 + "行目まで" : "") + (S.sel.r1 && S.sel.c1 ? " / " : "")
+      + (S.sel.c1 ? colName(S.sel.c1 - 1) + "列まで" : ""), "ok");
+    toast("スクロールしても " + a1(S.sel.r1, S.sel.c1) + " の上と左が残ります");
+  }
+  renderSrc();
+});
+$("optShowHidden").addEventListener("change", function () {
+  renderSrc();
+  log("非表示の行・列: " + (this.checked ? "表示する" : "隠す"));
+});
+
+/* --- 出力の末尾へ続けて置く --- */
+function maxDestCol(o) {
+  var m = -1;
+  o.blocks.forEach(function (b) {
+    var s = rangeSize(b), w = b.trans ? s.h : s.w;
+    if (b.dc + w - 1 > m) m = b.dc + w - 1;
+  });
+  return m;
+}
+function appendAnchor(o, dir) {
+  if (!o || !o.blocks.length) return { r: 0, c: 0 };
+  if (dir === "right") {
+    // 直前に置いたものの右隣。無ければ末尾のブロックを基準にする
+    var last = o.blocks.filter(function (b) { return b.id === S.lastBlockId; })[0]
+      || o.blocks[o.blocks.length - 1];
+    var s = rangeSize(last), w = last.trans ? s.h : s.w;
+    return { r: last.dr, c: last.dc + w };
+  }
+  var left = Infinity;
+  o.blocks.forEach(function (b) { if (b.dc < left) left = b.dc; });
+  return { r: maxDestRow(o) + 1, c: left === Infinity ? 0 : left };
+}
+function placeAppend(dir) {
+  if (!S.sel) return;
+  var o = activeOut() || addOutSheet("抜粋1", true);
+  var at = appendAnchor(o, dir);
+  var b = addBlock({ sheet: S.sel.sheet, r1: S.sel.r1, c1: S.sel.c1, r2: S.sel.r2, c2: S.sel.c2 }, at.r, at.c, o);
+  clearGhost();
+  log("配置: " + S.sheets[b.sheet].name + "!" + rangeLabel(b) + " → " + o.name + "!" + a1(b.dr, b.dc), "ok");
+  toast((dir === "right" ? "末尾の右" : "末尾の下") + "に置きました（" + a1(b.dr, b.dc) + "）");
+}
+["Down", "Right"].forEach(function (d) {
+  var dir = d.toLowerCase();
+  var btn = $("btnAppend" + d);
+  btn.addEventListener("click", function () { placeAppend(dir); });
+  // どこに置かれるかを、押す前に出力側で見せる
+  btn.addEventListener("mouseenter", function () {
+    if (!S.sel || btn.disabled) return;
+    var at = appendAnchor(activeOut(), dir);
+    showGhost(at.r, at.c, { kind: "range", sheet: S.sel.sheet, r1: S.sel.r1, c1: S.sel.c1, r2: S.sel.r2, c2: S.sel.c2 });
+  });
+  btn.addEventListener("mouseleave", clearGhost);
+  btn.addEventListener("focus", function () {
+    if (!S.sel || btn.disabled) return;
+    var at = appendAnchor(activeOut(), dir);
+    showGhost(at.r, at.c, { kind: "range", sheet: S.sel.sheet, r1: S.sel.r1, c1: S.sel.c1, r2: S.sel.r2, c2: S.sel.c2 });
+  });
+  btn.addEventListener("blur", clearGhost);
+});
 
 $("btnPlace").addEventListener("click", function () {
   if (!S.sel) return;

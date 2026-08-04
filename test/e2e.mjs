@@ -470,6 +470,107 @@ await page.click("#loadClose");
 await page.click("#btnSample");
 await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
 
+// ---- 9d. Excel で開いたときと同じ見え方（色・非表示・幅・固定） ----------
+await page.setInputFiles("#fileInput", join(root, "test/fixtures/書式つき.xlsx"));
+await page.waitForFunction(() => window.__app.S.fileName === "書式つき.xlsx", { timeout: 20000 });
+
+// 塗りつぶし色がそのまま出る
+const fillA1 = await page.$eval('#srcGrid .gc[data-r="0"][data-c="0"]', (n) => getComputedStyle(n).backgroundColor);
+check("見出しの塗りつぶし色が出る", fillA1 === "rgb(31, 95, 168)", fillA1);
+const fillB3 = await page.$eval('#srcGrid .gc[data-r="2"][data-c="1"]', (n) => getComputedStyle(n).backgroundColor);
+check("条件つき色分けのセルも色が出る", fillB3 === "rgb(255, 242, 204)", fillB3);
+const textA1 = await page.$eval('#srcGrid .gc[data-r="0"][data-c="0"]', (n) => getComputedStyle(n).color);
+check("濃い背景では文字を白くする", textA1 === "rgb(255, 255, 255)", textA1);
+
+// 非表示の列 C と行 4 は出さない
+check("非表示の列は描かれない", (await page.locator('#srcGrid .gc[data-c="2"]').count()) === 0);
+check("非表示の行は描かれない", (await page.locator('#srcGrid .gc[data-r="3"]').count()) === 0);
+check("非表示があることを知らせる", await page.isVisible("#hiddenNote"));
+check("シート情報に非表示の数が出る",
+  /非表示 1行\/1列/.test(await page.textContent("#srcSheetName")), await page.textContent("#srcSheetName"));
+check("非表示の跡に目印が出る", (await page.locator("#srcGrid .after-hidden-c").count()) > 0);
+
+// 「非表示も表示」で見えるようになる
+await page.check("#optShowHidden");
+check("非表示も表示にすると出てくる",
+  (await page.locator('#srcGrid .gc[data-c="2"]').count()) > 0
+  && (await page.locator('#srcGrid .gc[data-r="3"]').count()) > 0);
+await page.uncheck("#optShowHidden");
+
+// 列幅がファイルどおり（A=14文字ぶん、B=9文字ぶん）
+const wA = await page.$eval('#srcGrid .gc[data-r="1"][data-c="0"]', (n) => n.getBoundingClientRect().width);
+const wB = await page.$eval('#srcGrid .gc[data-r="1"][data-c="1"]', (n) => n.getBoundingClientRect().width);
+check("列ごとに幅が変わる", Math.round(wA) === 84 && Math.round(wB) === 54, `A=${Math.round(wA)} B=${Math.round(wB)}`);
+
+// ウィンドウ枠の固定
+await page.fill("#refFrom", "B3");
+await page.fill("#refTo", "B3");
+await page.click("#btnApplyRef");
+await page.click("#btnFreeze");
+check("固定するとボタンが解除に変わる", (await page.textContent("#btnFreeze")) === "固定を解除");
+check("固定した行・列の層が出る",
+  (await page.isVisible("#srcGrid .gfrz-top")) && (await page.isVisible("#srcGrid .gfrz-left")));
+// スクロールしても固定部分が画面内に残る
+await page.evaluate(() => { const w = document.getElementById("srcGrid"); w.scrollTop = 400; w.scrollLeft = 300; });
+await page.waitForTimeout(120);
+const frozenStuck = await page.evaluate(() => {
+  const w = document.getElementById("srcGrid").getBoundingClientRect();
+  const t = document.querySelector("#srcGrid .gfrz-top").getBoundingClientRect();
+  const l = document.querySelector("#srcGrid .gfrz-left").getBoundingClientRect();
+  return { topIn: t.top >= w.top - 1 && t.top < w.top + 40, leftIn: l.left >= w.left - 1 && l.left < w.left + 60 };
+});
+check("スクロールしても固定した行が上に残る", frozenStuck.topIn, JSON.stringify(frozenStuck));
+check("スクロールしても固定した列が左に残る", frozenStuck.leftIn, JSON.stringify(frozenStuck));
+// 固定した行・列の「見出し」も一緒に残る
+const frozenHeads = await page.evaluate(() => {
+  const w = document.getElementById("srcGrid").getBoundingClientRect();
+  const ns = [...document.querySelectorAll("#srcGrid .gfrzhead .gh")];
+  return ns.map((n) => ({
+    label: n.textContent,
+    inView: n.getBoundingClientRect().top >= w.top - 1 && n.getBoundingClientRect().left >= w.left - 1,
+  }));
+});
+check("固定した行番号・列名も画面内に残る",
+  frozenHeads.length === 3 && frozenHeads.every((h) => h.inView),
+  frozenHeads.map((h) => h.label + (h.inView ? "○" : "×")).join(","));
+await page.click("#btnFreeze");
+check("固定を解除できる", (await page.textContent("#btnFreeze")) === "ここで固定");
+
+// ---- 9e. 出力の末尾の下／右へ続けて置く ---------------------------------
+await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
+await page.fill("#refFrom", "A2");
+await page.fill("#refTo", "F2");
+await page.click("#btnApplyRef");
+await page.click("#btnAppendDown");
+await page.fill("#refFrom", "A3");
+await page.fill("#refTo", "F3");
+await page.click("#btnApplyRef");
+await page.click("#btnAppendRight");
+await page.fill("#refFrom", "A5");
+await page.fill("#refTo", "F5");
+await page.click("#btnApplyRef");
+await page.click("#btnAppendDown");
+const appended = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
+check("末尾の下は次の行、末尾の右は横に並ぶ",
+  appended.join(",") === "抜粋1!A1,抜粋1!G1,抜粋1!A2", appended.join(","));
+// 押す前にどこへ置かれるか見える
+await page.fill("#refFrom", "A6");
+await page.fill("#refTo", "F6");
+await page.click("#btnApplyRef");
+await page.hover("#btnAppendRight");
+check("押す前に置き場所が出力側に見える", (await page.locator("#dstGrid .dropghost").count()) === 1);
+// 「末尾の右」＝直前に置いたブロックの右隣（手順書の「右に続けて置く」と同じ基準）
+check("見えている置き場所が末尾の右",
+  /^G2 へ 1×6/.test(await page.textContent("#dstGrid .dropghost .lbl")),
+  await page.textContent("#dstGrid .dropghost .lbl"));
+await page.hover("#btnSelAll");
+check("離すと消える", (await page.locator("#dstGrid .dropghost").count()) === 0);
+
+// あとの検証のためサンプルに戻す
+await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
+await page.click("#btnSample");
+await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
+
 // ---- 9b. 読み込んだExcelがブラウザに保存されないことの実測 ---------------
 const storage = await page.evaluate(async () => {
   const ls = {};
