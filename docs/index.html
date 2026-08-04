@@ -191,9 +191,28 @@ button, input, select, textarea { font: inherit; color: inherit; }
    ============================================================ */
 .panes {
   display: grid;
-  grid-template-columns: 232px minmax(0,1fr) minmax(0,1fr);
+  grid-template-columns: 232px minmax(200px, var(--srcW, 1fr)) 7px minmax(200px, 1fr);
   min-height: 0;
 }
+/* 元データと出力シートの境目。掴んで広さを変えられる */
+.splitter {
+  background: var(--line); cursor: col-resize; position: relative;
+}
+.splitter::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(to right, transparent 2px, var(--muted) 2px 3px, transparent 3px,
+                              transparent 4px, var(--muted) 4px 5px, transparent 5px);
+  opacity: 0; transition: opacity .12s ease;
+}
+.splitter:hover::after, .splitter:focus-visible::after, .splitter.dragging::after { opacity: .5; }
+.splitter:hover, .splitter.dragging { background: var(--src-line); }
+body.stacked .splitter { cursor: row-resize; }
+body.stacked .splitter::after {
+  background: linear-gradient(to bottom, transparent 2px, var(--muted) 2px 3px, transparent 3px,
+                              transparent 4px, var(--muted) 4px 5px, transparent 5px);
+}
+body.srcmax .splitter { display: none; }
+@media (prefers-reduced-motion: reduce) { .splitter::after { transition: none; } }
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); position: relative; }
 .pane + .pane { border-left: 1px solid var(--line); }
 /* 折り返さない = 選択内容が変わっても高さが動かない（ドラッグ中のズレ防止） */
@@ -494,7 +513,7 @@ body.srcmax .pane-src { border-left: none; }
 /* ブック構成そのものを畳む（元データと出力シートを広く使うため） */
 .railtoggle { padding: 2px 6px; font-size: 13px; line-height: 1; color: var(--muted); }
 .railtoggle:hover { color: var(--ink); background: var(--sunken); }
-body.railoff .panes { grid-template-columns: 34px minmax(0, 1fr) minmax(0, 1fr); }
+body.railoff .panes { grid-template-columns: 34px minmax(200px, var(--srcW, 1fr)) 7px minmax(200px, 1fr); }
 body.railoff.stacked .panes { grid-template-columns: 34px minmax(0, 1fr); }
 body.railoff .pane-rail .pane-body { display: none; }
 body.railoff .pane-rail .pane-head { padding: 9px 4px 8px; justify-content: center; }
@@ -503,11 +522,12 @@ body.railoff .railtitle { display: none; }
 /* 元データを上・出力シートを下に並べる配置 */
 body.stacked .panes {
   grid-template-columns: 232px minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(120px, var(--srcH, 1fr)) 7px minmax(120px, 1fr);
 }
-body.stacked .pane-rail { grid-column: 1; grid-row: 1 / span 2; }
+body.stacked .pane-rail { grid-column: 1; grid-row: 1 / span 3; }
 body.stacked .pane-src { grid-column: 2; grid-row: 1; }
-body.stacked .pane-dst { grid-column: 2; grid-row: 2; border-left: 1px solid var(--line); border-top: 1px solid var(--line); }
+body.stacked .splitter { grid-column: 2; grid-row: 2; }
+body.stacked .pane-dst { grid-column: 2; grid-row: 3; border-left: 1px solid var(--line); border-top: 1px solid var(--line); }
 
 .hmenu {
   position: fixed; z-index: 70; min-width: 168px;
@@ -716,7 +736,6 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <button class="btn sm" id="btnMaxSrc" title="元データを画面いっぱいに表示します（Escで戻る）">⤢ 全画面</button>
       </div>
       <div class="toolbar">
-        <span class="selinfo none" id="selInfo">未選択</span>
         <button class="btn sm" id="btnFreeze" title="選んだセルの上と左でウィンドウ枠を固定します">ここで固定</button>
         <label class="chk" id="hiddenNote" hidden><input type="checkbox" id="optShowHidden"> <span id="hiddenLabel">非表示も表示</span></label>
         <div class="spacer"></div>
@@ -757,6 +776,10 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         </div>
       </div>
     </section>
+
+    <div class="splitter" id="splitter" role="separator" tabindex="0"
+         aria-label="元データと出力シートの境目（ドラッグで動かせます）"
+         title="ドラッグして広さを変えられます（ダブルクリックで半分に戻す）"></div>
 
     <!-- 出力 -->
     <section class="pane pane-dst" aria-label="出力シート">
@@ -801,7 +824,6 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <span class="eyebrow" id="scriptTitle">手順書</span>
         <span class="hint">同じ作業を使い回す。Ctrl+Enter で実行</span>
         <div class="spacer"></div>
-        <span class="hint mono" id="recipeState"></span>
         <button class="btn sm" id="scClose" aria-label="閉じる">閉じる</button>
       </div>
 
@@ -810,11 +832,6 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <button class="btn sm" id="scFromBlocks">今の配置から作る</button>
         <button class="btn sm src-accent" id="scRepeat" title="指示行を「繰り返し」で包みます">繰り返しにする</button>
         <label class="chk"><input type="checkbox" id="scClear" checked> 実行前に出力を空にする</label>
-        <span class="sep"></span>
-        <input class="inp w-name" id="scName" placeholder="手順書の名前" aria-label="手順書の名前">
-        <button class="btn sm" id="scSave">保存</button>
-        <select class="inp" id="scList" aria-label="保存済みの手順書"></select>
-        <button class="btn sm" id="scDel">削除</button>
         <span class="sep"></span>
         <button class="btn sm" id="scExport">ファイルに書き出す</button>
         <button class="btn sm" id="scImportBtn">ファイルから読む</button>
@@ -1575,17 +1592,8 @@ function renderSrcOverlay() {
 }
 
 function updateSelUI() {
-  var info = $("selInfo");
-  if (S.sel) {
-    var sz = rangeSize(S.sel);
-    info.classList.remove("none");
-    info.textContent = S.sheets[S.sel.sheet].name + "!" + rangeLabel(S.sel) + "  " + sz.h + "×" + sz.w;
-    $("btnPlace").disabled = false;
-  } else {
-    info.classList.add("none");
-    info.textContent = "未選択";
-    $("btnPlace").disabled = true;
-  }
+  // 選んだ範囲は、つまみのラベル（⠿ A2:D6）で分かるので、別の表示は出さない
+  $("btnPlace").disabled = !S.sel;
 }
 
 function setSelection(r1, c1, r2, c2, sheet) {
@@ -2692,29 +2700,6 @@ function wrapAsRepeat(valuesText) {
   return { from: t.from, count: cnt, varName: t.varName, values: values };
 }
 
-/* --- 保存済みの手順書（このブラウザの中だけに保存される） --- */
-var RKEY = "excel-extract-recipes-v1";
-function loadRecipes() {
-  try { return JSON.parse(localStorage.getItem(RKEY) || "{}") || {}; } catch (e) { return {}; }
-}
-function storeRecipes(o) {
-  try { localStorage.setItem(RKEY, JSON.stringify(o)); return true; }
-  catch (e) { toast("このブラウザに保存できませんでした: " + e.message, "er"); return false; }
-}
-function renderRecipeList() {
-  var sel = $("scList"), r = loadRecipes(), names = Object.keys(r).sort();
-  sel.innerHTML = "";
-  var o0 = el("option", null, names.length ? "保存済みを開く…" : "保存済みはありません");
-  o0.value = "";
-  sel.appendChild(o0);
-  names.forEach(function (n) {
-    var op = el("option", null, n);
-    op.value = n;
-    sel.appendChild(op);
-  });
-  $("recipeState").textContent = names.length ? "保存済み " + names.length + "件" : "";
-}
-
 /* ============================================================
    8. 生成
    ============================================================ */
@@ -2857,6 +2842,61 @@ function setFold(btnId, open, remember) {
     setFold(id, $(id).getAttribute("aria-expanded") !== "true", true);
   });
 });
+
+/* --- 元データと出力シートの境目を動かす --- */
+(function () {
+  var el2 = $("splitter"), panes = document.querySelector(".panes");
+  var dragging = false;
+
+  function apply(px, remember) {
+    var stacked = document.body.classList.contains("stacked");
+    var r = panes.getBoundingClientRect();
+    var max = (stacked ? r.height : r.width) - 200;
+    px = clamp(px, 160, Math.max(200, max));
+    panes.style.setProperty(stacked ? "--srcH" : "--srcW", px + "px");
+    if (remember) savePref(stacked ? "splitH" : "splitW", px);
+  }
+  function fromPointer(e) {
+    var stacked = document.body.classList.contains("stacked");
+    var r = panes.getBoundingClientRect();
+    var rail = document.querySelector(".pane-rail").getBoundingClientRect();
+    return stacked ? e.clientY - r.top : e.clientX - r.left - rail.width;
+  }
+  el2.addEventListener("pointerdown", function (e) {
+    dragging = true;
+    el2.classList.add("dragging");
+    el2.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  el2.addEventListener("pointermove", function (e) { if (dragging) apply(fromPointer(e), false); });
+  el2.addEventListener("pointerup", function (e) {
+    if (!dragging) return;
+    dragging = false;
+    el2.classList.remove("dragging");
+    apply(fromPointer(e), true);
+    try { el2.releasePointerCapture(e.pointerId); } catch (err) {}
+  });
+  // 半分に戻す
+  el2.addEventListener("dblclick", function () {
+    var stacked = document.body.classList.contains("stacked");
+    panes.style.removeProperty(stacked ? "--srcH" : "--srcW");
+    savePref(stacked ? "splitH" : "splitW", 0);
+    toast("広さを半分に戻しました");
+  });
+  // キーボードでも動かせるように
+  el2.addEventListener("keydown", function (e) {
+    var stacked = document.body.classList.contains("stacked");
+    var key = e.key, step = e.shiftKey ? 60 : 20;
+    var cur = parseFloat(getComputedStyle(panes).getPropertyValue(stacked ? "--srcH" : "--srcW"));
+    if (isNaN(cur)) {
+      var b = document.querySelector(".pane-src").getBoundingClientRect();
+      cur = stacked ? b.height : b.width;
+    }
+    if ((!stacked && key === "ArrowLeft") || (stacked && key === "ArrowUp")) { apply(cur - step, true); e.preventDefault(); }
+    if ((!stacked && key === "ArrowRight") || (stacked && key === "ArrowDown")) { apply(cur + step, true); e.preventDefault(); }
+  });
+  window.__setSplit = apply;
+})();
 
 /** ブック構成そのものを畳む（元データと出力シートを広く使う） */
 function setRail(open, remember) {
@@ -3041,7 +3081,7 @@ $("inspDel").addEventListener("click", function () { if (S.selBlock) removeBlock
 /* --- 手順書パネルの開閉 --- */
 function openScript(open) {
   $("scriptModal").hidden = !open;
-  if (open) { renderRecipeList(); $("scText").focus(); }
+  if (open) $("scText").focus();
   else hideRepeatForm();
 }
 $("btnScript").addEventListener("click", function () { openScript(true); });
@@ -3079,46 +3119,11 @@ $("repeatValues").addEventListener("keydown", function (e) {
 });
 $("repeatCancel").addEventListener("click", hideRepeatForm);
 
-$("scSave").addEventListener("click", function () {
-  var name = $("scName").value.trim();
-  if (!name) { toast("手順書の名前を入れてください", "wa"); $("scName").focus(); return; }
-  if (!$("scText").value.trim()) { toast("手順書が空です", "wa"); return; }
-  var r = loadRecipes();
-  if (r[name] && !confirm("「" + name + "」を上書きしますか？")) return;
-  r[name] = { text: $("scText").value, savedAt: new Date().toISOString() };
-  if (!storeRecipes(r)) return;
-  renderRecipeList();
-  $("scList").value = name;
-  log("手順書「" + name + "」を保存しました", "ok");
-  toast("「" + name + "」を保存しました（このブラウザ内のみ）");
-});
-
-$("scList").addEventListener("change", function () {
-  var name = this.value;
-  if (!name) return;
-  var r = loadRecipes();
-  if (!r[name]) return;
-  $("scText").value = r[name].text;
-  $("scName").value = name;
-  log("手順書「" + name + "」を読み込みました");
-});
-
-$("scDel").addEventListener("click", function () {
-  var name = $("scList").value || $("scName").value.trim();
-  if (!name) { toast("削除する手順書を選んでください", "wa"); return; }
-  var r = loadRecipes();
-  if (!r[name]) { toast("「" + name + "」は保存されていません", "wa"); return; }
-  if (!confirm("「" + name + "」を削除しますか？")) return;
-  delete r[name];
-  storeRecipes(r);
-  renderRecipeList();
-  log("手順書「" + name + "」を削除しました");
-});
-
 $("scExport").addEventListener("click", function () {
   var txt = $("scText").value;
   if (!txt.trim()) { toast("手順書が空です", "wa"); return; }
-  var name = ($("scName").value.trim() || "手順書") + ".txt";
+  var base = (S.fileName || "").replace(/\.[^.]+$/, "");
+  var name = (base ? base + "_手順書" : "手順書") + ".txt";
   saveBlob(new Blob([txt], { type: "text/plain;charset=utf-8" }), name);
   toast(name + " を書き出しました。共有すれば他の人も同じ処理ができます");
 });
@@ -3130,7 +3135,6 @@ $("scImport").addEventListener("change", function (e) {
   var fr = new FileReader();
   fr.onload = function () {
     $("scText").value = String(fr.result);
-    $("scName").value = f.name.replace(/\.[^.]+$/, "");
     openScript(true);
     log("手順書「" + f.name + "」を読み込みました", "ok");
     toast(f.name + " を読み込みました");
@@ -3168,13 +3172,15 @@ renderOutTabs();
 dstGrid.setSize(40, 24);
 dstGrid.refresh();
 renderBlockList();
-renderRecipeList();
 (function applyPrefs() {
   var p = loadPrefs();
   setFold("foldSheets", p.foldSheets !== false, false);
   setFold("foldBlocks", p.foldBlocks !== false, false);
   setRail(p.rail !== false, false);
   setLayout(!!p.stacked, false);
+  var panesEl = document.querySelector(".panes");
+  if (p.splitW > 0) panesEl.style.setProperty("--srcW", p.splitW + "px");
+  if (p.splitH > 0) panesEl.style.setProperty("--srcH", p.splitH + "px");
 })();
 log("Excelを読み込むと解析を開始します");
 

@@ -53,6 +53,17 @@ function check(name, cond, extra) {
   console.log(`${cond ? "  ok  " : " FAIL "} ${name}${extra ? ` (${extra})` : ""}`);
 }
 
+/** いま選んでいる範囲を "売上明細!A2:D6 5×4" の形で返す（画面には出さなくなったため） */
+async function selInfo() {
+  return await page.evaluate(() => {
+    const A = window.__app, g = A.S.sel;
+    if (!g) return "未選択";
+    const col = (c) => { let s = "", n = c + 1; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - m - 1) / 26; } return s; };
+    return A.S.sheets[g.sheet].name + "!" + col(g.c1) + (g.r1 + 1) + ":" + col(g.c2) + (g.r2 + 1)
+      + "  " + (g.r2 - g.r1 + 1) + "×" + (g.c2 - g.c1 + 1);
+  });
+}
+
 /** 範囲を選ぶ（画面の入力欄は廃止したので、アプリの API で指定する） */
 async function selectRange(from, to) {
   await page.evaluate(([f, t]) => {
@@ -117,7 +128,7 @@ await page.mouse.move(b1.x + 5, b1.y + 5);
 await page.mouse.down();
 await page.mouse.move(b2.x + 40, b2.y + 12, { steps: 8 });
 await page.mouse.up();
-let selText = await page.textContent("#selInfo");
+let selText = await selInfo();
 check("ドラッグで A2:D6 が選択される", /A2:D6/.test(selText) && /5×4/.test(selText), selText);
 
 // ---- 3. 選択範囲のつまみを出力シートへドラッグ＆ドロップ ----------------
@@ -177,7 +188,7 @@ await page.waitForTimeout(80);
 
 // ---- 4. 範囲を指定しての選択 + 「出力へ配置」クリック --------------------
 await selectRange("A1", "C3");
-selText = await page.textContent("#selInfo");
+selText = await selInfo();
 check("A1:C3 を選択できる", /A1:C3/.test(selText), selText);
 await page.click("#btnPlace");
 const dstCell2 = await page.locator('#dstGrid .gc[data-r="12"][data-c="0"]').boundingBox();
@@ -427,18 +438,13 @@ const guarded = await page.evaluate(() => {
 });
 check("シート名の数字も候補には入る（保護は置換時）", guarded === "10", String(guarded));
 
-// 保存 → 別の手順書に差し替え → 読み戻し
-await page.fill("#scName", "月次テスト");
-await page.click("#scSave");
-await page.fill("#scText", "# 消してよい内容");
-await page.selectOption("#scList", "月次テスト");
-check("保存した手順書を読み戻せる", (await page.inputValue("#scText")).includes("繰り返し 行 = 10, 12, 17"));
-check("保存件数が表示される", /保存済み 1件/.test(await page.textContent("#recipeState")));
-
-// 別ブラウザの人に渡す想定でファイルに書き出す
+// 別の人に渡す想定でファイルに書き出す（ブラウザには保存しない）
+check("ブラウザ保存のボタンは無い",
+  (await page.locator("#scSave").count()) === 0 && (await page.locator("#scList").count()) === 0
+  && (await page.locator("#scName").count()) === 0);
 const onScreen = await page.inputValue("#scText");
 const [dl3] = await Promise.all([page.waitForEvent("download"), page.click("#scExport")]);
-check("手順書をファイルに書き出せる", dl3.suggestedFilename() === "月次テスト.txt", dl3.suggestedFilename());
+check("手順書をファイルに書き出せる", dl3.suggestedFilename() === "サンプル売上_手順書.txt", dl3.suggestedFilename());
 const exported = join(tmp, "recipe.txt");
 await dl3.saveAs(exported);
 const exportedText = readFileSync(exported, "utf8");
@@ -635,7 +641,7 @@ check("Escでメニューが閉じる", (await page.locator(".hmenu").count()) =
 const frozenCell = await page.locator('#srcGrid .gfrz-corner .gc[data-r="1"][data-c="0"]').boundingBox();
 await page.mouse.click(frozenCell.x + 10, frozenCell.y + 10);
 check("スクロール後も固定セルを正しく選べる",
-  /A2/.test(await page.textContent("#selInfo")), await page.textContent("#selInfo"));
+  /A2/.test(await selInfo()), await selInfo());
 await page.evaluate(() => { const w = document.getElementById("srcGrid"); w.scrollTop = 0; w.scrollLeft = 0; });
 await page.evaluate(() => { window.__app.S.sheets[window.__app.S.active].freeze = null; window.__app.S.sel = null; });
 
@@ -705,7 +711,7 @@ check("ブロックは増えない（移動であって複製ではない）",
 // 選択の中をクリックだけしたら、そのセルへ畳む（Excel と同じ）
 const selBox2 = await page.locator("#srcGrid .selbox").boundingBox();
 await page.mouse.click(selBox2.x + 10, selBox2.y + 10);
-const collapsed = await page.textContent("#selInfo");
+const collapsed = await selInfo();
 check("選択の中をクリックすると1セルになる", /A3:A3|A3\b/.test(collapsed) && /1×1/.test(collapsed), collapsed);
 
 // 1行目に置いたときも、ラベルが列見出しに隠れず全部読めること
@@ -869,7 +875,7 @@ const heads = await page.$$eval(".pane-head", (ns) => ns.map((n) => n.textConten
 check("ペインの見出しは名前と操作だけになる",
   /^‹\s*ブック構成$/.test(heads[0]) && /^元データ/.test(heads[1]) && /^出力シート$/.test(heads[2]),
   heads.join(" | "));
-check("選択情報はツールバーに移る", await page.isVisible(".toolbar #selInfo"));
+check("選択範囲の表示は出さない", (await page.locator("#selInfo").count()) === 0);
 
 // 左レールは項目ごとに折りたためる
 check("最初は開いている", (await page.getAttribute("#foldSheets", "aria-expanded")) === "true");
@@ -916,6 +922,44 @@ check("開き直せる",
   (await page.isVisible("#sheetList"))
   && (await page.evaluate(() => document.querySelector(".pane-rail").getBoundingClientRect().width)) > 150);
 
+// 元データと出力シートの境目をドラッグして広さを変える
+const beforeSplit = await page.evaluate(() => ({
+  src: Math.round(document.querySelector(".pane-src").getBoundingClientRect().width),
+  dst: Math.round(document.querySelector(".pane-dst").getBoundingClientRect().width),
+}));
+const sp = await page.locator("#splitter").boundingBox();
+await page.mouse.move(sp.x + sp.width / 2, sp.y + sp.height / 2);
+await page.mouse.down();
+await page.mouse.move(sp.x + 220, sp.y + sp.height / 2, { steps: 10 });
+await page.mouse.up();
+const afterSplit = await page.evaluate(() => ({
+  src: Math.round(document.querySelector(".pane-src").getBoundingClientRect().width),
+  dst: Math.round(document.querySelector(".pane-dst").getBoundingClientRect().width),
+}));
+check("境目を右へ動かすと元データが広がる", afterSplit.src > beforeSplit.src + 150,
+  `${beforeSplit.src} → ${afterSplit.src}`);
+check("そのぶん出力シートは狭くなる", afterSplit.dst < beforeSplit.dst - 150,
+  `${beforeSplit.dst} → ${afterSplit.dst}`);
+check("動かしてもセルは描かれている",
+  (await page.$$eval("#dstGrid .gc", (ns) => ns.length)) > 10,
+  String(await page.$$eval("#dstGrid .gc", (ns) => ns.length)));
+// 左へ戻すと出力シートが広がる
+await page.mouse.move(sp.x + 220, sp.y + sp.height / 2);
+await page.mouse.down();
+await page.mouse.move(sp.x - 200, sp.y + sp.height / 2, { steps: 10 });
+await page.mouse.up();
+const leftSplit = await page.evaluate(() => Math.round(document.querySelector(".pane-dst").getBoundingClientRect().width));
+check("左へ動かすと出力シートが広がる", leftSplit > afterSplit.dst + 300, `${afterSplit.dst} → ${leftSplit}`);
+// ダブルクリックで半々に戻る
+await page.dblclick("#splitter");
+await page.waitForTimeout(150);
+const evened = await page.evaluate(() => ({
+  src: Math.round(document.querySelector(".pane-src").getBoundingClientRect().width),
+  dst: Math.round(document.querySelector(".pane-dst").getBoundingClientRect().width),
+}));
+check("ダブルクリックで半分に戻る", Math.abs(evened.src - evened.dst) < 10,
+  `${evened.src} / ${evened.dst}`);
+
 // 左右／上下の並べ替え
 const sideBySide = await page.evaluate(() => {
   const s = document.querySelector(".pane-src").getBoundingClientRect();
@@ -961,12 +1005,12 @@ const storage = await page.evaluate(async () => {
   return { ls, ss, cookie: document.cookie, dbs };
 });
 // 置かれるのは手順書と画面の好みだけ（どちらもセルの値は含まない）
-check("localStorage に置くのは手順書と画面設定だけ",
-  Object.keys(storage.ls).every((k) => k === "excel-extract-recipes-v1" || k === "excel-extract-prefs-v1"),
+check("localStorage に置くのは画面設定だけ",
+  Object.keys(storage.ls).every((k) => k === "excel-extract-prefs-v1"),
   Object.keys(storage.ls).join(","));
 check("画面設定には並べ方と折りたたみしか入らない",
   Object.keys(JSON.parse(storage.ls["excel-extract-prefs-v1"] || "{}"))
-    .every((k) => ["stacked", "foldSheets", "foldBlocks", "rail"].indexOf(k) >= 0),
+    .every((k) => ["stacked", "foldSheets", "foldBlocks", "rail", "splitW", "splitH"].indexOf(k) >= 0),
   storage.ls["excel-extract-prefs-v1"]);
 check("sessionStorage / Cookie / IndexedDB は未使用",
   Object.keys(storage.ss).length === 0 && storage.cookie === "" && storage.dbs.length === 0,
@@ -979,8 +1023,8 @@ await page.reload();
 await page.waitForFunction(() => !!window.__app);
 check("再読み込みで読み込んだブックは消える",
   await page.evaluate(() => window.__app.S.wb === null && window.__app.S.sheets.length === 0));
-check("手順書は再読み込み後も残る",
-  (await page.evaluate(() => localStorage.getItem("excel-extract-recipes-v1"))) !== null);
+check("手順書はブラウザに残さない",
+  (await page.evaluate(() => localStorage.getItem("excel-extract-recipes-v1"))) === null);
 
 // ---- 10. 外部に一切送信していないことの実測 -----------------------------
 const external = requests.filter((r) => !r.url.startsWith(baseUrl) && !r.url.startsWith("data:") && !r.url.startsWith("blob:"));
