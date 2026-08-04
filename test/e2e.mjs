@@ -1039,6 +1039,52 @@ check("上の表示はファイル数とシート数になる",
 check("シート一覧はファイルごとにまとまる",
   two.heads.join(",") === "サンプル売上.xlsx,書式つき.xlsx", two.heads.join(","));
 
+// 元データの見出しでファイルを切り替えられる
+const fileTabs = await page.$$eval("#srcFiles .filetab .fnm", (ns) => ns.map((n) => n.textContent));
+check("元データの見出しにファイルが並ぶ",
+  fileTabs.join(",") === "サンプル売上.xlsx,書式つき.xlsx", fileTabs.join(","));
+check("いま見ているファイルが分かる", await page.evaluate(() =>
+  document.querySelectorAll('#srcFiles .filetab[aria-current="true"] .fnm')[0].textContent) === "書式つき.xlsx");
+check("シートのタブは、そのファイルのぶんだけ", await page.evaluate(() =>
+  [...document.querySelectorAll("#srcTabs .tab")].map((n) => n.textContent).join(",")) === "書式つき,通常",
+  await page.evaluate(() => [...document.querySelectorAll("#srcTabs .tab")].map((n) => n.textContent).join(",")));
+// 1つめのファイルへ戻る
+await page.click('#srcFiles .filetab:has-text("サンプル売上.xlsx")');
+await page.waitForTimeout(200);
+check("ファイルをクリックすると切り替わる", await page.evaluate(() =>
+  [...document.querySelectorAll("#srcTabs .tab")].map((n) => n.textContent).join(",")) === "売上明細,支店別サマリ,商品マスタ",
+  await page.evaluate(() => [...document.querySelectorAll("#srcTabs .tab")].map((n) => n.textContent).join(",")));
+check("切り替えると中身も入れ替わる",
+  (await page.textContent('#srcGrid .gc[data-r="0"][data-c="0"]')) === "売上明細",
+  await page.textContent('#srcGrid .gc[data-r="0"][data-c="0"]'));
+// 見ていたシートを覚えていて、戻ると同じところを見せる
+await page.click("#srcTabs .tab >> nth=2");
+await page.waitForTimeout(150);
+await page.click('#srcFiles .filetab:has-text("書式つき.xlsx")');
+await page.waitForTimeout(150);
+await page.click('#srcFiles .filetab:has-text("サンプル売上.xlsx")');
+await page.waitForTimeout(200);
+check("戻ってくると前に見ていたシートを開く", await page.evaluate(() =>
+  window.__app.S.sheets[window.__app.S.active].name) === "商品マスタ",
+  await page.evaluate(() => window.__app.S.sheets[window.__app.S.active].name));
+// 左のシート一覧から別のファイルのシートを選ぶと、ファイルごと切り替わる
+await page.click('#sheetList .sheet-item:has-text("通常")');
+await page.waitForTimeout(200);
+check("シート一覧から選ぶとファイルも切り替わる", await page.evaluate(() =>
+  window.__app.S.files[window.__app.S.activeFile].name) === "書式つき.xlsx",
+  await page.evaluate(() => window.__app.S.files[window.__app.S.activeFile].name));
+check("2ファイル以上のときだけファイルの並びを出す", await page.isVisible("#srcFiles"));
+await page.click('#srcFiles .filetab:has-text("サンプル売上.xlsx")');
+await page.waitForTimeout(150);
+// 片方を閉じて 1 ファイルに戻すと、並びは引っ込む
+await page.evaluate(() => window.__app.removeFile(1));
+await page.waitForTimeout(200);
+check("1ファイルのときは並びを出さない",
+  !(await page.isVisible("#srcFiles")) && (await page.evaluate(() => window.__app.S.files.length)) === 1);
+// もう一度開いて、続きのテストに備える
+await page.setInputFiles("#fileInput", join(root, "test/fixtures/書式つき.xlsx"));
+await page.waitForFunction(() => window.__app.S.files.length === 2, { timeout: 20000 });
+
 // 別のファイルのシートからも、いつもどおり置ける
 await page.evaluate(() => {
   const A = window.__app;
@@ -1095,9 +1141,9 @@ const dupPath = join(tmp, "もう一つ.xlsx");
 }
 await page.setInputFiles("#fileInput", dupPath);
 await page.waitForFunction(() => window.__app.S.files.length === 2, { timeout: 20000 });
-check("同名シートはタブにファイル名を添える", await page.evaluate(() =>
-  [...document.querySelectorAll("#srcTabs .tab")].map((n) => n.textContent).join(",")
-    === "売上明細（サンプル売上.xlsx）,支店別サマリ,商品マスタ,売上明細（もう一つ.xlsx）"),
+// シートのタブは、いま見ているファイルのぶんだけ
+check("タブはいま見ているファイルのシートだけ", await page.evaluate(() =>
+  [...document.querySelectorAll("#srcTabs .tab")].map((n) => n.textContent).join(",")) === "売上明細",
   await page.evaluate(() => [...document.querySelectorAll("#srcTabs .tab")].map((n) => n.textContent).join(",")));
 const picked = await page.evaluate(() => ({
   plain: window.__app.matchSheetName("売上明細のA1:B2"),

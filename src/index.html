@@ -231,6 +231,29 @@ body.stacked .splitter::after {
 .rail-section:has(.rail-head[aria-expanded="false"]) { padding-bottom: 2px; }
 @media (prefers-reduced-motion: reduce) { .rail-head .caret { transition: none; } }
 .sheetlist { display: flex; flex-direction: column; gap: 2px; }
+/* 元データの見出しに並ぶ、開いているファイルの切り替え */
+.filetabs {
+  display: flex; align-items: center; gap: 4px; min-width: 0;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+}
+.filetabs::-webkit-scrollbar { display: none; }
+.filetab {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  border: 1px solid var(--line); border-radius: 100px; background: var(--surface);
+  color: var(--ink-2); cursor: pointer; font-size: 11px; padding: 2px 4px 2px 10px;
+  max-width: 220px; white-space: nowrap;
+}
+.filetab .fnm { overflow: hidden; text-overflow: ellipsis; }
+.filetab:hover { background: var(--src-soft); color: var(--src); }
+.filetab[aria-current="true"] {
+  background: var(--src-soft); border-color: var(--src); color: var(--src); font-weight: 700;
+}
+.filetab .x {
+  border: none; background: transparent; color: inherit; opacity: .55;
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0 3px; border-radius: 50%;
+}
+.filetab .x:hover { opacity: 1; color: var(--bad); background: var(--sunken); }
+
 /* シート一覧の中の、ファイルごとの見出し */
 .file-head {
   display: flex; align-items: center; gap: 6px;
@@ -780,6 +803,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
     <section class="pane pane-src" aria-label="元データ">
       <div class="pane-head">
         <span class="eyebrow" style="color:var(--src)">元データ</span>
+        <div class="filetabs" id="srcFiles" hidden></div>
         <div class="spacer"></div>
         <button class="btn sm" id="btnMaxSrc" title="元データを画面いっぱいに表示します（Escで戻る）">⤢ 全画面</button>
       </div>
@@ -989,6 +1013,7 @@ function toHalf(s) {
    ============================================================ */
 var S = {
   files: [],            // 読み込んだファイル [{name, wb}]。シートは file でここを指す
+  activeFile: 0,        // いま見ているファイル
   fileName: "", sheets: [], active: 0,
   sel: null,            // {sheet, r1,c1,r2,c2}
   dsel: null,           // 出力側で選んだ範囲（集計の対象）
@@ -1360,6 +1385,7 @@ function readWorkbook(data, name) {
     };
   });
   S.active = S.sheets.length;              // 足したファイルの先頭シートを見せる
+  S.activeFile = fi;
   S.sheets = S.sheets.concat(added);
   S.fileName = S.files[0].name;            // 書き出すときの名前は 1 つめのファイルから
   S.sel = null; S.extras = [];
@@ -1373,7 +1399,7 @@ function readWorkbook(data, name) {
 
   // 新しいブックは必ず左上から見せる（前のファイルのスクロール位置を引きずらない）
   $("srcGrid").scrollTop = 0; $("srcGrid").scrollLeft = 0;
-  renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList();
+  renderSrcFiles(); renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList();
   toast(name + " を読み込みました（" + added.length + "シート）"
     + (S.files.length > 1 ? " ／ 合わせて " + S.files.length + "ファイル" : ""));
   return true;
@@ -1422,7 +1448,8 @@ function removeFile(fi) {
     $("fileChip").hidden = true;
     $("btnGen").disabled = true;
   } else renderFileChip();
-  renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList();
+  S.activeFile = S.sheets.length ? S.sheets[S.active].file : 0;
+  renderSrcFiles(); renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList();
   toast(name + " を閉じました" + (dropped ? "（ブロック " + dropped + " 件も外しました）" : ""));
 }
 
@@ -1908,11 +1935,47 @@ function renderSheetList() {
   if (!S.sheets.length) box.innerHTML = '<p class="empty-note">ファイルを開くとシートが並びます。ファイルは何個でも開けます。シート名をつまんで出力側へ落とすと、シート全体をまるごと配置できます。</p>';
 }
 
+/** 元データの見出しに、開いているファイルを並べる（2つ以上のときだけ出す） */
+function renderSrcFiles() {
+  var host = $("srcFiles");
+  host.innerHTML = "";
+  host.hidden = S.files.length < 2;
+  if (host.hidden) return;
+  S.files.forEach(function (f, fi) {
+    var t = el("button", "filetab");
+    t.setAttribute("aria-current", fi === S.activeFile ? "true" : "false");
+    t.title = f.name;
+    t.appendChild(el("span", "fnm", f.name));
+    var x = el("button", "x", "×");
+    x.title = "このファイルを閉じる";
+    x.setAttribute("aria-label", f.name + " を閉じる");
+    x.addEventListener("click", function (e) { e.stopPropagation(); removeFile(fi); });
+    t.appendChild(x);
+    t.addEventListener("click", function () { switchFile(fi); });
+    host.appendChild(t);
+  });
+}
+
+/** そのファイルへ切り替える。前に見ていたシートがあればそこへ戻る */
+function switchFile(fi) {
+  if (!S.files[fi]) return;
+  var want = S.files[fi].lastSheet;
+  var first = -1;
+  for (var i = 0; i < S.sheets.length; i++) {
+    if (S.sheets[i].file !== fi) continue;
+    if (first < 0) first = i;
+    if (i === want) { first = i; break; }
+  }
+  if (first >= 0) switchSheet(first);
+}
+
+/** いま見ているファイルのシートだけをタブに出す */
 function renderSrcTabs() {
   var tabs = $("srcTabs");
   tabs.innerHTML = "";
   S.sheets.forEach(function (sh, i) {
-    var t = el("button", "tab", sheetLabel(i));
+    if (sh.file !== S.activeFile) return;
+    var t = el("button", "tab", sh.name);
     t.title = sheetFullName(i);
     t.setAttribute("aria-current", i === S.active ? "true" : "false");
     t.draggable = true;
@@ -1928,8 +1991,12 @@ function renderSrcTabs() {
 }
 
 function switchSheet(i) {
+  var sh = S.sheets[i];
+  if (!sh) return;
   S.active = i; S.sel = null;
-  renderSheetList(); renderSrcTabs(); renderSrc();
+  S.activeFile = sh.file;
+  if (S.files[sh.file]) S.files[sh.file].lastSheet = i;   // 戻ってきたとき同じシートを見せる
+  renderSrcFiles(); renderSheetList(); renderSrcTabs(); renderSrc();
   $("srcGrid").scrollTop = 0; $("srcGrid").scrollLeft = 0;
 }
 
@@ -2470,14 +2537,6 @@ function sheetNameIsAmbiguous(i) {
   var sh = S.sheets[i];
   if (!sh) return false;
   return S.sheets.some(function (o, j) { return j !== i && o.name === sh.name; });
-}
-/** タブに出す名前。名前がぶつかるときだけファイル名を添える */
-function sheetLabel(i) {
-  var sh = S.sheets[i];
-  if (!sh) return "";
-  if (!sheetNameIsAmbiguous(i)) return sh.name;
-  var f = S.files[sh.file];
-  return sh.name + "（" + (f ? f.name : "?") + "）";
 }
 /** 手順書に書くときの名前。ぶつかるときは [ファイル名]シート名 と書く */
 function sheetFullName(i) {
@@ -3533,7 +3592,7 @@ window.__app = {
   execLine: execLine, expandScript: expandScript, runScript: runScript,
   scriptFromBlocks: scriptFromBlocks, parseValueList: parseValueList,
   wrapAsRepeat: wrapAsRepeat, commonRowNumber: commonRowNumber, openScript: openScript,
-  loadFile: loadFile, loadFiles: loadFiles, removeFile: removeFile,
+  loadFile: loadFile, loadFiles: loadFiles, removeFile: removeFile, switchFile: switchFile,
   sheetFullName: sheetFullName, matchSheetName: matchSheetName,
   showLoading: showLoading, setStage: setStage,
   parseCell: parseCell, setMaxSrc: setMaxSrc, setMaxPane: setMaxPane, openHeaderMenu: openHeaderMenu,
