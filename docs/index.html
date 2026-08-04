@@ -312,7 +312,10 @@ body.stacked .splitter::after {
 
 /* --- シートタブ --- */
 .tabs {
-  display: flex; align-items: stretch; gap: 0; overflow-x: auto;
+  display: flex; align-items: stretch; gap: 0;
+  /* 横は溢れたら送れるように。縦は出さない（overflow-x だけ指定すると縦が auto に
+     なり、1px でも溢れると上下のスクロールバーが出てしまう） */
+  overflow-x: auto; overflow-y: hidden;
   border-top: 1px solid var(--line); background: var(--panel); flex: none;
   scrollbar-width: thin;
 }
@@ -324,8 +327,10 @@ body.stacked .splitter::after {
 }
 .tab:hover { background: var(--sunken); }
 .tab[aria-current="true"] { color: var(--ink); background: var(--surface); font-weight: 700; }
+/* 下線は枠の内側に置く。はみ出させると縦に 1px 溢れて、上下のスクロールバーの
+   もとになる（縦を hidden にしたので、はみ出したぶんは切られてしまう） */
 .tab[aria-current="true"]::after {
-  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
   background: var(--tabaccent, var(--src));
 }
 .tabs.dst .tab[aria-current="true"]::after { background: var(--dst); }

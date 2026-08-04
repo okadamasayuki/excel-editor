@@ -1153,6 +1153,38 @@ check("＋はタブの右端にある",
     return host.lastElementChild.classList.contains("tab-add");
   }));
 
+// シートのタブは横にだけ送れればよい。overflow-x だけ指定すると縦が auto になり、
+// 1px 溢れただけで上下のスクロールバーが出てしまう
+const tabScroll = async () => await page.evaluate(() =>
+  ["srcTabs", "dstTabsHost"].map((id) => {
+    const n = document.getElementById(id), cs = getComputedStyle(n);
+    return { id, y: cs.overflowY, x: cs.overflowX,
+      overflowsY: n.scrollHeight > n.clientHeight, canScrollX: n.scrollWidth > n.clientWidth };
+  }));
+const tabs0 = await tabScroll();
+check("シートのタブに上下のスクロールバーを出さない",
+  tabs0.every((t) => t.y === "hidden" && !t.overflowsY), JSON.stringify(tabs0));
+check("横は送れるままにする", tabs0.every((t) => t.x === "auto"), JSON.stringify(tabs0));
+// タブが並びきらないときは、実際に横へ送れること
+for (let i = 0; i < 8; i++) await page.click("#dstTabsHost .tab-add");
+await page.waitForTimeout(150);
+const tabsMany = await page.evaluate(() => {
+  const n = document.getElementById("dstTabsHost");
+  n.scrollLeft = 9999;
+  return { canScrollX: n.scrollWidth > n.clientWidth, moved: Math.round(n.scrollLeft),
+    overflowsY: n.scrollHeight > n.clientHeight };
+});
+check("タブが並びきらないときは横へ送れる",
+  tabsMany.canScrollX && tabsMany.moved > 0, JSON.stringify(tabsMany));
+check("タブが増えても上下には溢れない", !tabsMany.overflowsY, JSON.stringify(tabsMany));
+// 増やしたぶんは片づける
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = A.S.out.slice(0, 2); A.S.activeOut = 0; A.S.selBlock = null;
+});
+await page.click("#dstTabsHost .tab >> nth=0");
+await page.waitForTimeout(120);
+
 // ブック構成そのものも畳める（元データ・出力シートを広く使うため）
 const railWide = await page.evaluate(() => document.querySelector(".pane-rail").getBoundingClientRect().width);
 const srcWide = await page.evaluate(() => document.querySelector(".pane-src").getBoundingClientRect().width);
