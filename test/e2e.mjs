@@ -29,17 +29,18 @@ const tmp = join(root, ".tmp-test");
 rmSync(tmp, { recursive: true, force: true });
 mkdirSync(tmp, { recursive: true });
 
-// Artifact 側のラッパ（doctype/head/body）を再現したプレビューを作る
-const page_html = readFileSync(join(root, "dist/index.html"), "utf8");
-const previewPath = join(tmp, "preview.html");
-const wrapped = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"></head><body>${page_html}</body></html>`;
-writeFileSync(previewPath, wrapped);
+// 実際に GitHub Pages で配信されるファイルそのものを検証する
+const pageHtml = readFileSync(join(root, "docs/index.html"), "utf8");
+// Artifact 用の断片は、配信側のラッパ（doctype/head/body）を再現して煙テストする
+const fragment = readFileSync(join(root, "dist/index.html"), "utf8");
+const wrappedFragment = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"></head><body>${fragment}</body></html>`;
+writeFileSync(join(tmp, "artifact-preview.html"), wrappedFragment);
 
 // blob: の download 属性は file:// では無視されるため、実際の配信と同じ http で見る
 const server = createServer((req, res) => {
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  res.end(wrapped);
+  res.end(req.url.startsWith("/artifact") ? wrappedFragment : pageHtml);
 }).listen(0);
 await new Promise((r) => server.once("listening", r));
 const baseUrl = `http://127.0.0.1:${server.address().port}/`;
@@ -221,6 +222,18 @@ check("狭い画面でも横スクロールしない", overflowNarrow <= 1, `ove
 await page.screenshot({ path: join(root, "test/shots/narrow.png"), fullPage: false });
 
 check("JSエラーが出ていない", errors.length === 0, errors.slice(0, 3).join(" | "));
+
+// ---- 9. Artifact 用の断片も動くか（煙テスト） ---------------------------
+const p2 = await ctx.newPage();
+const errors2 = [];
+p2.on("pageerror", (e) => errors2.push(String(e)));
+await p2.goto(baseUrl + "artifact");
+await p2.waitForFunction(() => !!window.__app, { timeout: 10000 });
+await p2.click("#btnSample");
+await p2.waitForSelector("#srcGrid:not([hidden])");
+check("Artifact 断片版も起動する",
+  (await p2.$$eval("#sheetList .sheet-item", (ns) => ns.length)) === 3 && errors2.length === 0,
+  errors2.slice(0, 2).join(" | "));
 
 await browser.close();
 server.close();

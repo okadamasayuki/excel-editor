@@ -1,5 +1,7 @@
 # Excel 抜粋エディタ
 
+**https://okadamasayuki.github.io/excel-editor/**
+
 Excel ブックを読み込み、プレビュー上で範囲を選び、ドラッグ＆ドロップまたは文章の指示で
 出力シートに配置して、抜粋した Excel を書き出すブラウザツール。
 
@@ -23,16 +25,25 @@ Excel ブックを読み込み、プレビュー上で範囲を選び、ドラ�
 ```
 src/index.html    アプリ本体（HTML + CSS + JS）
 vendor/           SheetJS 0.18.5（Apache-2.0）
-build.mjs         SheetJS を埋め込んで dist/index.html を作る
-dist/index.html   配布用の単一ファイル。外部リクエストを一切しない
+build.mjs         SheetJS を埋め込んで配布物を作る
+docs/index.html   GitHub Pages で公開される単一ファイル（完全な HTML 文書）
+dist/index.html   Artifact 用の断片。<html>/<head>/<body> は配信側が付ける
 test/e2e.mjs      Playwright による通し検証（選択 → 配置 → 生成 → 中身の照合）
 ```
+
+どちらの成果物も外部へのリクエストを一切しない（SheetJS を含め全て埋め込み済み）。
+
+## 公開
+
+`.github/workflows/pages.yml` が push のたびに `docs/` を GitHub Pages へ配信する。
+ワークフローは `docs/` をビルドし直し、コミット済みの内容と一致するかを確認するので、
+`src/` を変更したら `node build.mjs` の結果を一緒にコミットすること。
 
 ## 開発
 
 ```sh
-node build.mjs     # dist/index.html を生成
-node test/e2e.mjs  # ブラウザで通しテスト（39項目）＋ スクリーンショット
+node build.mjs     # docs/index.html と dist/index.html を生成
+node test/e2e.mjs  # ブラウザで通しテスト（40項目）＋ スクリーンショット
 ```
 
 テストは生成された `.xlsx` を SheetJS で読み直し、値・型・配置先セルまで照合する。

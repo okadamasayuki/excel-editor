@@ -1,6 +1,9 @@
 /**
  * src/index.html の `INJECT:XLSX` プレースホルダに SheetJS を埋め込み、
- * 外部リクエストを一切しない単一ファイル dist/index.html を作る。
+ * 外部リクエストを一切しない単一ファイルを 2 種類つくる。
+ *
+ *   docs/index.html … GitHub Pages 用の完全な HTML 文書（これが公開されるページ）
+ *   dist/index.html … Artifact 用の断片。<html>/<head>/<body> は配信側が付ける
  */
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -65,12 +68,51 @@ function assertAllInStrings(src) {
 }
 
 const out = src.replace(marker, () => safeLib);
+if (/�/.test(out)) {
+  console.error("出力に U+FFFD が残っています");
+  process.exit(1);
+}
+
+// --- Artifact 用（断片） ---
 mkdirSync(join(root, "dist"), { recursive: true });
 writeFileSync(join(root, "dist/index.html"), out);
 
-if (/�/.test(out)) {
-  console.error("dist に U+FFFD が残っています");
-  process.exit(1);
-}
-const kb = (Buffer.byteLength(out) / 1024).toFixed(0);
-console.log(`dist/index.html を出力しました (${kb} KB, U+FFFD を ${fffd} 個エスケープ)`);
+// --- GitHub Pages 用（完全な HTML 文書） ---
+// 断片から <title> と <style> を取り出して <head> に移し、残りを <body> に置く
+const title = (out.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || "Excel 抜粋エディタ";
+const styles = [...out.matchAll(/<style>[\s\S]*?<\/style>/g)].map((m) => m[0]);
+let body = out.replace(/<title>[\s\S]*?<\/title>\s*/, "");
+for (const s of styles) body = body.replace(s, "");
+
+const desc = "Excel を読み込み、範囲を選んでドラッグ＆ドロップや文章の指示で配置し、"
+  + "抜粋した Excel を書き出すツール。処理はすべてブラウザ内で完結します。";
+const favicon = "data:image/svg+xml," + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+  + '<text y=".95em" font-size="92">\u{1F4D7}</text></svg>');
+
+const pageHtml = `<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>${title}</title>
+<meta name="description" content="${desc}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="${title}">
+<meta property="og:description" content="${desc}">
+<link rel="icon" href="${favicon}">
+${styles.join("\n")}
+</head>
+<body>
+${body.trim()}
+</body>
+</html>
+`;
+mkdirSync(join(root, "docs"), { recursive: true });
+writeFileSync(join(root, "docs/index.html"), pageHtml);
+writeFileSync(join(root, "docs/.nojekyll"), "");   // Jekyll の処理を通さない
+
+const kb = (n) => (Buffer.byteLength(n) / 1024).toFixed(0);
+console.log(`docs/index.html (${kb(pageHtml)} KB) と dist/index.html (${kb(out)} KB) を出力しました`);
+console.log(`U+FFFD を ${fffd} 個エスケープ`);
