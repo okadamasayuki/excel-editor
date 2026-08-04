@@ -382,7 +382,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .blockbox.sel { box-shadow: 0 0 0 2px color-mix(in srgb, var(--bc, var(--dst)) 40%, transparent); }
 /* 薄いブロックを積むとラベルが上の行を覆うので、選択中とホバー中だけ出す */
-.blockbox { pointer-events: auto; }
+/* ブロックはどこを掴んでも動かせる */
+.blockbox { pointer-events: auto; cursor: grab; }
+.blockbox:active { cursor: grabbing; }
 .blockbox .tag { visibility: hidden; }
 .blockbox:hover .tag, .blockbox.sel .tag { visibility: visible; }
 .blockbox .tag {
@@ -1149,6 +1151,13 @@ function makeGrid(wrap, opts) {
       }
     });
   };
+  /** そのセルが真ん中あたりに来るまで動かす（端に張り付かせない） */
+  G.centerOn = function (r, c) {
+    var top = HH + G.rowY[r], left = HW + G.colX[c];
+    var h = G.rowHeight(r) || CH, w = G.colWidth(c) || CW;
+    wrap.scrollTop = clamp(top + h / 2 - wrap.clientHeight / 2, 0, Math.max(0, wrap.scrollHeight - wrap.clientHeight));
+    wrap.scrollLeft = clamp(left + w / 2 - wrap.clientWidth / 2, 0, Math.max(0, wrap.scrollWidth - wrap.clientWidth));
+  };
   G.scrollToCell = function (r, c) {
     var top = HH + G.rowY[r], left = HW + G.colX[c];
     var h = G.rowHeight(r) || CH, w = G.colWidth(c) || CW;
@@ -1854,6 +1863,19 @@ function renderOutOverlay(cont) {
     var n = el("div", "blockbox" + (S.selBlock === b.id ? " sel" : "") + (cont.overlap[bi] ? " overlap" : ""));
     n.dataset.id = b.id;
     n.style.cssText = "left:" + box.left + "px;top:" + box.top + "px;width:" + box.width + "px;height:" + box.height + "px;--bc:" + blockColor(b) + ";";
+    // 置き場所を間違えたときは、ブロックのどこを掴んでも動かせる
+    var startMove = function (e) {
+      // ここで再描画すると掴んでいる要素が作り直されてドラッグが切れるので、状態は触らない
+      dragPayload = { kind: "move", id: b.id };
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", rangeLabel(b));
+    };
+    var endMove = function () { dragPayload = null; clearGhost(true); };
+    n.draggable = true;
+    n.title = S.sheets[b.sheet].name + "!" + rangeLabel(b) + " → " + a1(b.dr, b.dc) + "（ドラッグで動かせます）";
+    n.addEventListener("dragstart", startMove);
+    n.addEventListener("dragend", endMove);
+
     var tag = el("div", "tag");
     tag.draggable = true;
     tag.title = S.sheets[b.sheet].name + "!" + rangeLabel(b) + " → " + a1(b.dr, b.dc) + "（ドラッグで移動）";
@@ -2826,7 +2848,8 @@ function ghostPayload() {
 function gotoAppend(dir) {
   var o = activeOut() || addOutSheet("抜粋1", true);
   var at = appendAnchor(o, dir);
-  dstGrid.scrollToCell(at.r, at.c);
+  // 端ぎりぎりだと落としにくいので、真ん中あたりに持ってくる
+  dstGrid.centerOn(at.r, at.c);
   dstGrid.draw();
   ghostPinned = false;
   showGhost(at.r, at.c, ghostPayload());

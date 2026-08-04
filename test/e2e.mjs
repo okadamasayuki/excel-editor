@@ -677,6 +677,26 @@ await page.mouse.up();
 const appended = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
 check("末尾の下・右に並べられる", appended.join(",") === "抜粋1!A1,抜粋1!G1", appended.join(","));
 
+// 置き場所を間違えたら、ブロックのどこを掴んでも動かせる
+// （直前の移動で出力側が動いているので、先頭に戻してから掴む）
+await page.evaluate(() => {
+  const w = document.getElementById("dstGrid");
+  w.scrollTop = 0; w.scrollLeft = 0;
+});
+await page.waitForTimeout(120);
+const blockBox = await page.locator('#dstGrid .blockbox').first().boundingBox();
+const moveTo = await page.locator('#dstGrid .gc[data-r="5"][data-c="1"]').boundingBox();
+await page.mouse.move(blockBox.x + blockBox.width / 2, blockBox.y + blockBox.height / 2);
+await page.mouse.down();
+await page.mouse.move(moveTo.x + 20, moveTo.y + 10, { steps: 14 });
+await page.mouse.move(moveTo.x + 22, moveTo.y + 12, { steps: 3 });
+await page.mouse.up();
+const movedTo = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
+check("ブロックの本体を掴んで置き直せる", movedTo.includes("抜粋1!B6"), movedTo.join(","));
+check("ブロックは増えない（移動であって複製ではない）",
+  (await page.locator("#blockList .block-card").count()) === 2,
+  String(await page.locator("#blockList .block-card").count()));
+
 // 選択の中をクリックだけしたら、そのセルへ畳む（Excel と同じ）
 const selBox2 = await page.locator("#srcGrid .selbox").boundingBox();
 await page.mouse.click(selBox2.x + 10, selBox2.y + 10);
@@ -700,6 +720,14 @@ const moved = await page.evaluate(() => {
 });
 check("移動先が画面外ならそこまで表示が動く", moved.scrollTop > 200, `scrollTop=${Math.round(moved.scrollTop)}`);
 check("移動先の目印が画面内に入る", moved.inView, JSON.stringify(moved));
+// 端ぎりぎりではなく、真ん中あたりに来ること
+const centered = await page.evaluate(() => {
+  const w = document.getElementById("dstGrid").getBoundingClientRect();
+  const g = document.querySelector("#dstGrid .dropghost").getBoundingClientRect();
+  return { offset: Math.abs((g.top + g.height / 2) - (w.top + w.height / 2)), viewH: w.height };
+});
+check("移動先は画面の真ん中あたりに来る", centered.offset < centered.viewH * 0.25,
+  `中心から ${Math.round(centered.offset)}px（画面高 ${Math.round(centered.viewH)}px）`);
 check("移動先は末尾の下 A61",
   /^A61 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
   await page.textContent("#dstGrid .dropghost .lbl"));
