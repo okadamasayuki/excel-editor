@@ -62,6 +62,21 @@ async function selectRange(from, to) {
   }, [from, to]);
 }
 
+/** いま選んでいる範囲を、出力シートの指定セル（例 "G1"）へドラッグして置く */
+async function dragSelectionToRef(ref) {
+  const at = await page.evaluate((r) => {
+    const p = window.__app.parseCell(r);
+    return { r: p.r, c: p.c };
+  }, ref);
+  const target = await page.locator(`#dstGrid .gc[data-r="${at.r}"][data-c="${at.c}"]`).boundingBox();
+  const sel = await page.locator("#srcGrid .selbox").boundingBox();
+  await page.mouse.move(sel.x + sel.width / 2, sel.y + sel.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target.x + 20, target.y + 10, { steps: 12 });
+  await page.mouse.move(target.x + 22, target.y + 12, { steps: 3 });
+  await page.mouse.up();
+}
+
 // Chromium はロケールに合わせてダウンロード名を正規化するため、C ロケールのままだと
 // 日本語ファイル名が "download" に落ちる。実機と同じ UTF-8 で起動する。
 const browser = await chromium.launch({
@@ -640,40 +655,23 @@ await page.click("#btnAppendDown");
 check("移動ボタンでは置かれない（ブロックは増えない）",
   (await page.locator("#blockList .block-card").count()) === 0,
   String(await page.locator("#blockList .block-card").count()));
-check("移動先に目印が残る", (await page.locator("#dstGrid .dropghost").count()) === 1);
-check("空のときの移動先は A1",
-  /^A1 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
-  await page.textContent("#dstGrid .dropghost .lbl"));
+check("移動しても目印は出さない", (await page.locator("#dstGrid .dropghost").count()) === 0);
+check("空のときの移動先は A1", (await page.evaluate(() => window.__app.S.lastGoto)) === "A1", await page.evaluate(() => window.__app.S.lastGoto));
 
-// 目印のところへドラッグして置く（選択範囲は掴んだままなので、そのまま運べる）
-let ghostBox = await page.locator("#dstGrid .dropghost").boundingBox();
-let selBox = await page.locator("#srcGrid .selbox").boundingBox();
-await page.mouse.move(selBox.x + selBox.width / 2, selBox.y + selBox.height / 2);
-await page.mouse.down();
-await page.mouse.move(ghostBox.x + 20, ghostBox.y + 10, { steps: 12 });
-await page.mouse.move(ghostBox.x + 22, ghostBox.y + 12, { steps: 3 });
-await page.mouse.up();
+// 移動先のセルへドラッグして置く（選択範囲は掴んだままなので、そのまま運べる）
+await dragSelectionToRef(await page.evaluate(() => window.__app.S.lastGoto));
 check("選択範囲の中を掴んでドラッグできる",
   (await page.locator("#blockList .block-card").count()) === 1,
   String(await page.locator("#blockList .block-card").count()));
-check("目印の位置に置かれる",
+check("移動先の位置に置かれる",
   (await page.textContent("#blockList .block-card .row2 .to")) === "抜粋1!A1",
   await page.textContent("#blockList .block-card .row2 .to"));
-check("置いたら目印は消える", (await page.locator("#dstGrid .dropghost").count()) === 0);
 
 // 末尾の右へ移動 → その位置へドラッグ
 await selectRange("A3", "F3");
 await page.click("#btnAppendRight");
-check("末尾の右は直前のブロックの右隣",
-  /^G1 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
-  await page.textContent("#dstGrid .dropghost .lbl"));
-ghostBox = await page.locator("#dstGrid .dropghost").boundingBox();
-selBox = await page.locator("#srcGrid .selbox").boundingBox();
-await page.mouse.move(selBox.x + selBox.width / 2, selBox.y + selBox.height / 2);
-await page.mouse.down();
-await page.mouse.move(ghostBox.x + 20, ghostBox.y + 10, { steps: 12 });
-await page.mouse.move(ghostBox.x + 22, ghostBox.y + 12, { steps: 3 });
-await page.mouse.up();
+check("末尾の右は直前のブロックの右隣", (await page.evaluate(() => window.__app.S.lastGoto)) === "G1", await page.evaluate(() => window.__app.S.lastGoto));
+await dragSelectionToRef(await page.evaluate(() => window.__app.S.lastGoto));
 const appended = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
 check("末尾の下・右に並べられる", appended.join(",") === "抜粋1!A1,抜粋1!G1", appended.join(","));
 
@@ -757,25 +755,21 @@ await page.evaluate(() => {
 await selectRange("A5", "F5");
 await page.click("#btnAppendDown");
 await page.waitForTimeout(150);
+// 移動先のセルが画面内の真ん中あたりに来ること（目印は出さないので位置で確かめる）
 const moved = await page.evaluate(() => {
-  const w = document.getElementById("dstGrid");
-  const g = w.querySelector(".dropghost").getBoundingClientRect();
-  const view = w.getBoundingClientRect();
-  return { scrollTop: w.scrollTop, inView: g.top >= view.top - 1 && g.bottom <= view.bottom + 1 };
+  const w = document.getElementById("dstGrid"), G = window.__app.dstGrid;
+  const p = window.__app.parseCell(window.__app.S.lastGoto);
+  const box = G.box({ r1: p.r, c1: p.c, r2: p.r, c2: p.c });   // キャンバス内の位置
+  const view = { top: w.scrollTop, height: w.clientHeight };
+  const centerY = box.top + box.height / 2 - view.top;
+  return { scrollTop: w.scrollTop, inView: centerY > 0 && centerY < view.height,
+    offset: Math.abs(centerY - view.height / 2), viewH: view.height };
 });
 check("移動先が画面外ならそこまで表示が動く", moved.scrollTop > 200, `scrollTop=${Math.round(moved.scrollTop)}`);
-check("移動先の目印が画面内に入る", moved.inView, JSON.stringify(moved));
-// 端ぎりぎりではなく、真ん中あたりに来ること
-const centered = await page.evaluate(() => {
-  const w = document.getElementById("dstGrid").getBoundingClientRect();
-  const g = document.querySelector("#dstGrid .dropghost").getBoundingClientRect();
-  return { offset: Math.abs((g.top + g.height / 2) - (w.top + w.height / 2)), viewH: w.height };
-});
-check("移動先は画面の真ん中あたりに来る", centered.offset < centered.viewH * 0.25,
-  `中心から ${Math.round(centered.offset)}px（画面高 ${Math.round(centered.viewH)}px）`);
-check("移動先は末尾の下 A61",
-  /^A61 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
-  await page.textContent("#dstGrid .dropghost .lbl"));
+check("移動先のセルが画面内に入る", moved.inView, JSON.stringify(moved));
+check("移動先は画面の真ん中あたりに来る", moved.offset < moved.viewH * 0.25,
+  `中心から ${Math.round(moved.offset)}px（画面高 ${Math.round(moved.viewH)}px）`);
+check("移動先は末尾の下 A61", (await page.evaluate(() => window.__app.S.lastGoto)) === "A61", await page.evaluate(() => window.__app.S.lastGoto));
 
 // 文章で指示したときは、置いたブロックまで表示が動いて光る
 await page.click("#tabCmd");     // 手順書タブから1行指示に戻す
@@ -808,16 +802,12 @@ const sparse = await page.evaluate(() => {
 });
 check("行まるごとの選択は使用範囲いっぱいになる", sparse === 79, String(sparse));
 await page.click("#btnAppendRight");
-check("末尾の右は値の右隣（空欄は数えない）",
-  /^D1 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
-  await page.textContent("#dstGrid .dropghost .lbl"));
+check("末尾の右は値の右隣（空欄は数えない）", (await page.evaluate(() => window.__app.S.lastGoto)) === "D1", await page.evaluate(() => window.__app.S.lastGoto));
 check("遠くまで飛ばない",
   (await page.evaluate(() => document.getElementById("dstGrid").scrollLeft)) < 300,
   String(Math.round(await page.evaluate(() => document.getElementById("dstGrid").scrollLeft))));
 await page.click("#btnAppendDown");
-check("末尾の下も値の下（空欄は数えない）",
-  /^A2 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
-  await page.textContent("#dstGrid .dropghost .lbl"));
+check("末尾の下も値の下（空欄は数えない）", (await page.evaluate(() => window.__app.S.lastGoto)) === "A2", await page.evaluate(() => window.__app.S.lastGoto));
 
 // 本当に全列に値がある行なら、これまでどおり右端の続きへ
 await page.evaluate(() => {
@@ -827,9 +817,7 @@ await page.evaluate(() => {
   A.addBlock({ sheet: 0, r1: 0, c1: 0, r2: 0, c2: 79 }, 0, 0, A.S.out[0] || A.S.out[A.S.activeOut]);
 });
 await page.click("#btnAppendRight");
-check("値が全列にある行では右端の続きへ行く",
-  /^CC1 へ/.test(await page.textContent("#dstGrid .dropghost .lbl")),
-  await page.textContent("#dstGrid .dropghost .lbl"));
+check("値が全列にある行では右端の続きへ行く", (await page.evaluate(() => window.__app.S.lastGoto)) === "CC1", await page.evaluate(() => window.__app.S.lastGoto));
 
 await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
 await page.click("#btnSample");
@@ -851,21 +839,20 @@ for (let i = 0; i < 5; i++) {
   }, i);
   await page.click("#btnAppendRight");
   wide.push(await page.evaluate(() => {
-    const w = document.getElementById("dstGrid");
-    const g = document.querySelector("#dstGrid .dropghost");
-    return {
-      label: (g.querySelector(".lbl").textContent.match(/^\S+/) || [""])[0],
-      left: g.style.left, scrollLeft: Math.round(w.scrollLeft),
-    };
+    const w = document.getElementById("dstGrid"), A = window.__app;
+    const p = A.parseCell(A.S.lastGoto);
+    const box = A.dstGrid.box({ r1: p.r, c1: p.c, r2: p.r, c2: p.c });
+    return { label: A.S.lastGoto, left: box.left, scrollLeft: Math.round(w.scrollLeft) };
   }));
 }
-check("120列を超えても目印の位置が決まる",
-  wide.every((x) => /^\d+px$/.test(x.left)), JSON.stringify(wide.map((x) => x.left)));
+check("120列を超えても位置が計算できる（NaNにならない）",
+  wide.every((x) => Number.isFinite(x.left) && x.left > 0), JSON.stringify(wide.map((x) => x.left)));
 check("120列を超えても左上へ戻らない",
   wide.every((x) => x.scrollLeft > 1000), JSON.stringify(wide.map((x) => x.scrollLeft)));
 check("末尾は右へ伸び続ける",
   wide.map((x) => x.label).join(",") === "AF1,BJ1,CN1,DR1,EV1",
   wide.map((x) => x.label).join(","));
+check("120列を超えても左上へ戻らない（再掲）", wide[4].scrollLeft > 10000, String(wide[4].scrollLeft));
 
 await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
 await page.click("#btnSample");
@@ -874,8 +861,8 @@ await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上
 // ---- 9g. 画面まわり（折りたたみ・見出し・+ボタン・並べ方） ---------------
 // ヘッダは名前だけ
 const heads = await page.$$eval(".pane-head", (ns) => ns.map((n) => n.textContent.trim()));
-check("ペインの見出しは名前だけになる",
-  /^ブック構成$/.test(heads[0]) && /^元データ/.test(heads[1]) && /^出力シート$/.test(heads[2]),
+check("ペインの見出しは名前と操作だけになる",
+  /^‹\s*ブック構成$/.test(heads[0]) && /^元データ/.test(heads[1]) && /^出力シート$/.test(heads[2]),
   heads.join(" | "));
 check("選択情報はツールバーに移る", await page.isVisible(".toolbar #selInfo"));
 
@@ -903,6 +890,26 @@ check("＋はタブの右端にある",
     const host = document.getElementById("dstTabsHost");
     return host.lastElementChild.classList.contains("tab-add");
   }));
+
+// ブック構成そのものも畳める（元データ・出力シートを広く使うため）
+const railWide = await page.evaluate(() => document.querySelector(".pane-rail").getBoundingClientRect().width);
+const srcWide = await page.evaluate(() => document.querySelector(".pane-src").getBoundingClientRect().width);
+await page.click("#foldRail");
+await page.waitForTimeout(250);
+const railNarrow = await page.evaluate(() => document.querySelector(".pane-rail").getBoundingClientRect().width);
+const srcNarrow = await page.evaluate(() => document.querySelector(".pane-src").getBoundingClientRect().width);
+check("ブック構成を畳むと細くなる", railNarrow < 40 && railNarrow < railWide, `${Math.round(railWide)} → ${Math.round(railNarrow)}`);
+check("畳んだぶん元データが広がる", srcNarrow > srcWide + 50, `${Math.round(srcWide)} → ${Math.round(srcNarrow)}`);
+check("畳んでも開くボタンは残る", await page.isVisible("#foldRail"));
+check("畳むと中身は隠れる", !(await page.isVisible("#sheetList")));
+check("畳んでもグリッドは描かれている",
+  (await page.$$eval("#srcGrid .gc", (ns) => ns.length)) > 20,
+  String(await page.$$eval("#srcGrid .gc", (ns) => ns.length)));
+await page.click("#foldRail");
+await page.waitForTimeout(250);
+check("開き直せる",
+  (await page.isVisible("#sheetList"))
+  && (await page.evaluate(() => document.querySelector(".pane-rail").getBoundingClientRect().width)) > 150);
 
 // 左右／上下の並べ替え
 const sideBySide = await page.evaluate(() => {
@@ -954,7 +961,7 @@ check("localStorage に置くのは手順書と画面設定だけ",
   Object.keys(storage.ls).join(","));
 check("画面設定には並べ方と折りたたみしか入らない",
   Object.keys(JSON.parse(storage.ls["excel-extract-prefs-v1"] || "{}"))
-    .every((k) => ["stacked", "foldSheets", "foldBlocks"].indexOf(k) >= 0),
+    .every((k) => ["stacked", "foldSheets", "foldBlocks", "rail"].indexOf(k) >= 0),
   storage.ls["excel-extract-prefs-v1"]);
 check("sessionStorage / Cookie / IndexedDB は未使用",
   Object.keys(storage.ss).length === 0 && storage.cookie === "" && storage.dbs.length === 0,

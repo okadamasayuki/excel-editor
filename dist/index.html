@@ -481,6 +481,15 @@ body.srcmax .pane:not(.pane-src) { display: none; }
 body.srcmax .console { display: none; }
 body.srcmax .pane-src { border-left: none; }
 
+/* ブック構成そのものを畳む（元データと出力シートを広く使うため） */
+.railtoggle { padding: 2px 6px; font-size: 13px; line-height: 1; color: var(--muted); }
+.railtoggle:hover { color: var(--ink); background: var(--sunken); }
+body.railoff .panes { grid-template-columns: 34px minmax(0, 1fr) minmax(0, 1fr); }
+body.railoff.stacked .panes { grid-template-columns: 34px minmax(0, 1fr); }
+body.railoff .pane-rail .pane-body { display: none; }
+body.railoff .pane-rail .pane-head { padding: 9px 4px 8px; justify-content: center; }
+body.railoff .railtitle { display: none; }
+
 /* 元データを上・出力シートを下に並べる配置 */
 body.stacked .panes {
   grid-template-columns: 232px minmax(0, 1fr);
@@ -678,7 +687,11 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
   <div class="panes">
     <!-- 左レール -->
     <section class="pane pane-rail" aria-label="ブック構成">
-      <div class="pane-head"><span class="eyebrow">ブック構成</span></div>
+      <div class="pane-head">
+        <button class="btn ghost sm railtoggle" id="foldRail" aria-expanded="true"
+                title="ブック構成を畳んで、元データと出力シートを広く使います">‹</button>
+        <span class="eyebrow railtitle">ブック構成</span>
+      </div>
       <div class="pane-body">
         <div class="rail-section">
           <button class="rail-head" id="foldSheets" aria-expanded="true" aria-controls="sheetList">
@@ -1548,7 +1561,7 @@ function renderSrcOverlay() {
         e.dataTransfer.setData("text/plain", rangeLabel(it.g));
         pendingCollapse = null;
       };
-      var endDrag = function () { dragPayload = null; pendingCollapse = null; clearGhost(true); };
+      var endDrag = function () { dragPayload = null; pendingCollapse = null; clearGhost(); };
       box.draggable = true;
       box.title = "ドラッグして出力シートへ置く";
       box.addEventListener("dragstart", startDrag);
@@ -1776,7 +1789,7 @@ function renderSheetList() {
       e.dataTransfer.effectAllowed = "copy";
       e.dataTransfer.setData("text/plain", sh.name);
     });
-    b.addEventListener("dragend", function () { dragPayload = null; clearGhost(true); });
+    b.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
     box.appendChild(b);
   });
   if (!S.sheets.length) box.innerHTML = '<p class="empty-note">ファイルを開くとシートが並びます。シート名をつまんで出力側へ落とすと、シート全体をまるごと配置できます。</p>';
@@ -1795,7 +1808,7 @@ function renderSrcTabs() {
       e.dataTransfer.effectAllowed = "copy";
       e.dataTransfer.setData("text/plain", sh.name);
     });
-    t.addEventListener("dragend", function () { dragPayload = null; clearGhost(true); });
+    t.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
     tabs.appendChild(t);
   });
 }
@@ -1945,7 +1958,7 @@ function renderOutOverlay(cont) {
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", rangeLabel(b));
     };
-    var endMove = function () { dragPayload = null; clearGhost(true); };
+    var endMove = function () { dragPayload = null; clearGhost(); };
     n.draggable = true;
     n.title = S.sheets[b.sheet].name + "!" + rangeLabel(b) + " → " + a1(b.dr, b.dc) + "（ドラッグで動かせます）";
     n.addEventListener("dragstart", startMove);
@@ -1965,7 +1978,7 @@ function renderOutOverlay(cont) {
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", rangeLabel(b));
     });
-    tag.addEventListener("dragend", function () { dragPayload = null; clearGhost(true); });
+    tag.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
     tag.addEventListener("click", function (e) { e.stopPropagation(); selectBlock(b.id); });
     n.appendChild(tag);
     ovl.appendChild(n);
@@ -2071,7 +2084,7 @@ function renderBlockList() {
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", rangeLabel(b));
     });
-    card.addEventListener("dragend", function () { dragPayload = null; clearGhost(true); });
+    card.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
     box.appendChild(card);
   });
 }
@@ -2125,11 +2138,7 @@ function showGhost(r, c, p) {
   if (ghostEl.parentNode !== dstGrid.canvas) dstGrid.canvas.appendChild(ghostEl);
   placeChips($("dstGrid"), ".dropghost", ".lbl");
 }
-/** 「末尾へ移動」で出した目印は、次に置くまで残す（そこへドラッグできるように） */
-var ghostPinned = false;
-function clearGhost(force) {
-  if (ghostPinned && !force) return;
-  ghostPinned = false;
+function clearGhost() {
   if (ghostEl && ghostEl.parentNode) ghostEl.parentNode.removeChild(ghostEl);
   $("dstGrid").classList.remove("dragover");
   if (dstScroller) dstScroller.stop();
@@ -2148,13 +2157,12 @@ function clearGhost(force) {
     e.preventDefault();
     e.dataTransfer.dropEffect = dragPayload.kind === "move" ? "move" : "copy";
     wrap.classList.add("dragover");
-    ghostPinned = false;          // 実際に運んでいる間は、目印はポインタに従う
     dstScroller.move(e.clientX, e.clientY);
     var hit = dstGrid.cellAt(e.clientX, e.clientY, true);
     if (hit) showGhost(Math.max(hit.rawR, 0), Math.max(hit.rawC, 0), dragPayload);
   });
   wrap.addEventListener("dragleave", function (e) {
-    if (e.target === wrap) clearGhost(true);
+    if (e.target === wrap) clearGhost();
   });
   wrap.addEventListener("drop", function (e) {
     if (!dragPayload) return;
@@ -2163,7 +2171,7 @@ function clearGhost(force) {
     if (!hit) return;
     dropPayload(dragPayload, Math.max(hit.rawR, 0), Math.max(hit.rawC, 0));
     dragPayload = null;
-    clearGhost(true);
+    clearGhost();
   });
   // 「出力へ配置」で武装したあとのクリック配置
   wrap.addEventListener("click", function (e) {
@@ -2182,11 +2190,10 @@ function clearGhost(force) {
     S.armed = null;
     wrap.classList.remove("armed");
     $("dstHint").hidden = true; $("dstHint").textContent = "";
-    clearGhost(true);
+    clearGhost();
   });
   wrap.addEventListener("pointermove", function (e) {
     if (!S.armed) { if (dstScroller) dstScroller.stop(); return; }
-    ghostPinned = false;
     dstScroller.move(e.clientX, e.clientY);
     var hit = dstGrid.cellAt(e.clientX, e.clientY, true);
     if (hit) showGhost(Math.max(hit.rawR, 0), Math.max(hit.rawC, 0), S.armed);
@@ -2876,6 +2883,19 @@ function setFold(btnId, open, remember) {
   });
 });
 
+/** ブック構成そのものを畳む（元データと出力シートを広く使う） */
+function setRail(open, remember) {
+  document.body.classList.toggle("railoff", !open);
+  var b = $("foldRail");
+  b.setAttribute("aria-expanded", String(open));
+  b.textContent = open ? "‹" : "›";
+  b.title = open ? "ブック構成を畳んで、元データと出力シートを広く使います" : "ブック構成を開きます";
+  if (remember) savePref("rail", open);
+}
+$("foldRail").addEventListener("click", function () {
+  setRail($("foldRail").getAttribute("aria-expanded") !== "true", true);
+});
+
 /** 元データと出力シートを、左右に並べるか上下に並べるか */
 function setLayout(stacked, remember) {
   document.body.classList.toggle("stacked", stacked);
@@ -2969,26 +2989,17 @@ function appendAnchor(o, dir) {
     c: all.maxR >= 0 ? all.minC : 0
   };
 }
-/** 選択範囲ぶんの目印。選択が無ければ 1 セルぶんの目印にする */
-function ghostPayload() {
-  if (S.sel) {
-    return { kind: "range", sheet: S.sel.sheet, r1: S.sel.r1, c1: S.sel.c1, r2: S.sel.r2, c2: S.sel.c2 };
-  }
-  return { kind: "range", sheet: S.active, r1: 0, c1: 0, r2: 0, c2: 0 };
-}
-
-/** 末尾の続きまで出力側の表示を動かし、その場所に目印を残す（置きはしない） */
+/** 末尾の続きまで出力側の表示を動かす（置きはしないし、目印も残さない） */
 function gotoAppend(dir) {
   var o = activeOut() || addOutSheet("抜粋1", true);
   var at = appendAnchor(o, dir);
   // 端ぎりぎりだと落としにくいので、真ん中あたりに持ってくる
+  clearGhost();
   dstGrid.centerOn(at.r, at.c);
   dstGrid.draw();
-  ghostPinned = false;
-  showGhost(at.r, at.c, ghostPayload());
-  ghostPinned = true;                      // 次に置くまで目印を残す
-  log((dir === "right" ? "末尾の右" : "末尾の下") + " " + a1(at.r, at.c) + " へ移動");
-  toast(a1(at.r, at.c) + " へ移動しました。ここへドラッグして置けます");
+  S.lastGoto = a1(at.r, at.c);
+  log((dir === "right" ? "末尾の右" : "末尾の下") + " " + S.lastGoto + " へ移動");
+  toast(S.lastGoto + " へ移動しました");
 }
 ["Down", "Right"].forEach(function (d) {
   var dir = d.toLowerCase();
@@ -3008,7 +3019,7 @@ document.addEventListener("keydown", function (e) {
     setMaxSrc(false);
   }
   if (e.key === "Escape" && S.armed) {
-    S.armed = null; clearGhost(true);
+    S.armed = null; clearGhost();
     $("dstGrid").classList.remove("armed");
     $("dstHint").hidden = true; $("dstHint").textContent = "";
   }
@@ -3181,6 +3192,7 @@ renderRecipeList();
   var p = loadPrefs();
   setFold("foldSheets", p.foldSheets !== false, false);
   setFold("foldBlocks", p.foldBlocks !== false, false);
+  setRail(p.rail !== false, false);
   setLayout(!!p.stacked, false);
 })();
 log("Excelを読み込むと解析を開始します");
