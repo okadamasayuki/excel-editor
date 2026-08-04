@@ -53,6 +53,12 @@ function check(name, cond, extra) {
   console.log(`${cond ? "  ok  " : " FAIL "} ${name}${extra ? ` (${extra})` : ""}`);
 }
 
+/** サンプルに戻す。最初の画面を閉じたあとはボタンが無いので、アプリの API で読む */
+async function loadSampleAgain() {
+  await page.evaluate(() => window.__app.loadSample());
+  await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
+}
+
 /** いま選んでいる範囲を "売上明細!A2:D6 5×4" の形で返す（画面には出さなくなったため） */
 async function selInfo() {
   return await page.evaluate(() => {
@@ -120,7 +126,11 @@ await page.goto(baseUrl);
 await page.waitForFunction(() => !!window.__app);
 
 // ---- 1. サンプル読み込み ------------------------------------------------
-await page.click("#btnSample");
+check("右上にサンプルのボタンは無い", (await page.locator("#btnSample").count()) === 0);
+check("最初の画面にはサンプルのボタンがある", await page.isVisible("#btnSample2"));
+check("サンプルのダウンロードは出さない", (await page.locator("#btnSampleDl").count()) === 0);
+check("1・2・3 の手順書きは出さない", (await page.locator(".dropzone .steps").count()) === 0);
+await page.click("#btnSample2");
 await page.waitForSelector("#srcGrid:not([hidden])");
 const sheetNames = await page.$$eval("#sheetList .sheet-item .nm", (ns) => ns.map((n) => n.textContent));
 check("サンプルの3シートが並ぶ", sheetNames.length === 3, sheetNames.join(" / "));
@@ -305,20 +315,34 @@ check("集計用の単価が数値", ws2["C4"] && typeof ws2["C4"].v === "number
 
 // ---- 7. ブロック操作 ----------------------------------------------------
 await page.click("#dstTabsHost .tab >> nth=0");
+// 出力側の下の帯は、選んだ範囲の集計だけにした
+check("件数や貼り付け位置の欄は出さない",
+  (await page.locator("#outStat").count()) === 0
+  && (await page.locator("#inspAnchor").count()) === 0
+  && (await page.locator("#inspTitle").count()) === 0
+  && (await page.locator("#inspEmpty").count()) === 0);
+// 向きと削除はツールバーへ。選ぶまでは押せない
+check("ブロックを選ぶ前は向きと削除が押せない",
+  (await page.isDisabled("#inspTrans")) && (await page.isDisabled("#inspDel")));
+check("向きと削除は保持の設定と同じツールバーにいる", await page.evaluate(() =>
+  document.querySelector(".pane-dst .toolbar").contains(document.getElementById("inspTrans"))
+  && document.querySelector(".pane-dst .toolbar").contains(document.getElementById("inspDel"))));
 await page.click("#blockList .block-card >> nth=0");
-check("インスペクタが開く", await page.isVisible("#inspAnchor"));
-check("インスペクタの空状態ヒントは消える", !(await page.isVisible("#inspEmpty")));
-await page.fill("#inspAnchor", "A1");
-await page.press("#inspAnchor", "Enter");
-dest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
-check("インスペクタで貼り付け位置を変更できる", dest[0] === "抜粋1!A1", dest[0]);
+check("ブロックを選ぶと押せるようになる",
+  !(await page.isDisabled("#inspTrans")) && !(await page.isDisabled("#inspDel")));
 await page.click("#inspTrans");
 blocks = await page.$$eval("#blockList .block-card .row2", (ns) => ns.map((n) => n.textContent));
 check("転置が効く", /転置/.test(blocks[0]), blocks[0]);
 await page.keyboard.press("Control+z");
-await page.keyboard.press("Control+z");
 dest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
 check("Ctrl+Z で戻せる", dest[0] === "抜粋1!B3", dest[0]);
+// ツールバーの削除ボタンでも消せる
+await page.click("#blockList .block-card >> nth=0");
+const beforeDel = await page.$$eval("#blockList .block-card", (ns) => ns.length);
+await page.click("#inspDel");
+check("ツールバーの削除ボタンで消せる",
+  (await page.$$eval("#blockList .block-card", (ns) => ns.length)) === beforeDel - 1);
+await page.keyboard.press("Control+z");
 
 const before = await page.$$eval("#blockList .block-card", (ns) => ns.length);
 await page.click("#blockList .block-card >> nth=0 >> .icon-btn");
@@ -583,7 +607,7 @@ check("読み込み済みのブックは壊されない",
 await page.click("#loadClose");
 
 // あとの検証のためサンプルに戻す
-await page.click("#btnSample");
+await loadSampleAgain();
 await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
 
 // ---- 9d. Excel で開いたときと同じ見え方（色・非表示・幅・固定） ----------
@@ -841,7 +865,7 @@ check("置いた直後は光って知らせる",
 
 // あとの検証のためサンプルに戻す
 await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
-await page.click("#btnSample");
+await loadSampleAgain();
 await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
 
 // ---- 9f. 末尾は「値の入っている範囲」で判断する -------------------------
@@ -877,7 +901,7 @@ await page.click("#btnAppendRight");
 check("値が全列にある行では右端の続きへ行く", (await page.evaluate(() => window.__app.S.lastGoto)) === "CC1", await page.evaluate(() => window.__app.S.lastGoto));
 
 await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; });
-await page.click("#btnSample");
+await loadSampleAgain();
 await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
 
 // ---- 9f-2. 横に重ねて 120 列を超えても壊れない -------------------------
@@ -1011,7 +1035,7 @@ await page.evaluate(() => {
   window.__app.S.out = []; window.__app.S.selBlock = null; window.__app.S.sel = null;
   w.scrollTop = 0; w.scrollLeft = 0;
 });
-await page.click("#btnSample");
+await loadSampleAgain();
 await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
 
 // ---- 9f-3. 出力シートで範囲を選ぶと集計が出る ---------------------------
@@ -1029,19 +1053,31 @@ const colC = await page.locator('#dstGrid .gcolh .gh[data-c="2"]').boundingBox()
 await page.mouse.click(colC.x + 20, colC.y + 10);
 await page.waitForTimeout(120);
 check("列を選ぶと集計が出る", await page.isVisible("#dstStats"));
+check("集計はシートタブと同じ帯に出る", await page.evaluate(() => {
+  const f = document.getElementById("dstFoot"), st = document.getElementById("dstStats");
+  const tab = document.querySelector("#dstTabsHost .tab");
+  return f.contains(st) && f.contains(tab)
+    && Math.abs(st.getBoundingClientRect().y - tab.getBoundingClientRect().y) < 1;
+}));
+const footH0 = await page.evaluate(() => Math.round(document.getElementById("dstFoot").getBoundingClientRect().height));
 const stats = await page.textContent("#dstStats");
 // 支店別サマリ: 見出し「売上合計」+ 375600 / 432700 / 558800 / 569300 / 合計1936400
-check("データの個数が出る", /データの個数\s*6/.test(stats), stats);
-check("数値の個数が出る", /数値の個数\s*5/.test(stats), stats);
+check("データの個数が出る", /個数\s*6/.test(stats), stats);
+check("数値の個数が出る", /数値\s*5/.test(stats), stats);
 check("合計が出る", /合計\s*3,872,800/.test(stats), stats);
 check("平均が出る", /平均\s*774,560/.test(stats), stats);
 check("最大が出る", /最大\s*1,936,400/.test(stats), stats);
 check("最小が出る", /最小\s*375,600/.test(stats), stats);
 
+check("集計が出ても帯の高さは変わらない（グリッドがずれない）", await page.evaluate((h) => {
+  const f = document.getElementById("dstFoot");
+  return Math.round(f.getBoundingClientRect().height) === h;
+}, footH0), String(footH0));
+
 // 数値のない範囲では個数だけ
 await page.evaluate(() => window.__app.setDstSel(0, 0, 0, 2));
 check("数値が無ければ個数だけ出す",
-  /データの個数\s*3/.test(await page.textContent("#dstStats"))
+  /個数\s*3/.test(await page.textContent("#dstStats"))
   && !/合計/.test(await page.textContent("#dstStats")),
   await page.textContent("#dstStats"));
 
@@ -1055,9 +1091,9 @@ await page.mouse.move(c2.x + 40, c2.y + 12, { steps: 8 });
 await page.mouse.up();
 await page.keyboard.up("Shift");
 check("Shift+ドラッグで範囲を選べる",
-  /範囲\s*B2:C5/.test(await page.textContent("#dstStats")), await page.textContent("#dstStats"));
+  /^B2:C5/.test(await page.textContent("#dstStats")), await page.textContent("#dstStats"));
 check("選んだ範囲の合計が出る",
-  /数値の個数\s*8/.test(await page.textContent("#dstStats")), await page.textContent("#dstStats"));
+  /数値\s*8/.test(await page.textContent("#dstStats")), await page.textContent("#dstStats"));
 // そのままのドラッグではブロックが動く（選択にはならない）
 const dcBefore = await page.evaluate(() => window.__app.S.out[0].blocks[0].dc);
 await page.mouse.move(c1.x + 40, c1.y + 12);
@@ -1078,10 +1114,10 @@ await page.waitForTimeout(150);
 await page.click("#dstGrid .blockbox");
 await page.waitForTimeout(120);
 check("ブロックを選ぶとその範囲の集計になる",
-  /範囲\s*A1:C6/.test(await page.textContent("#dstStats")), await page.textContent("#dstStats"));
+  /^A1:C6/.test(await page.textContent("#dstStats")), await page.textContent("#dstStats"));
 
 await page.evaluate(() => { window.__app.clearDstSel(); window.__app.S.out = []; window.__app.S.selBlock = null; });
-await page.click("#btnSample");
+await loadSampleAgain();
 await page.waitForFunction(() => window.__app.S.fileName === "サンプル売上.xlsx");
 
 // ---- 9g. 画面まわり（折りたたみ・見出し・+ボタン・並べ方） ---------------
@@ -1301,7 +1337,7 @@ const errors2 = [];
 p2.on("pageerror", (e) => errors2.push(String(e)));
 await p2.goto(baseUrl + "artifact");
 await p2.waitForFunction(() => !!window.__app, { timeout: 10000 });
-await p2.click("#btnSample");
+await p2.click("#btnSample2");
 await p2.waitForSelector("#srcGrid:not([hidden])");
 check("Artifact 断片版も起動する",
   (await p2.$$eval("#sheetList .sheet-item", (ns) => ns.length)) === 3 && errors2.length === 0,

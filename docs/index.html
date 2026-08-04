@@ -294,7 +294,6 @@ body.stacked .splitter::after {
   min-width: 0;
 }
 .inp:focus { border-color: var(--src); outline: none; box-shadow: 0 0 0 2px var(--src-soft); }
-.inp.w-ref { width: 76px; text-align: center; }
 .inp.w-name { width: 130px; font-family: var(--font-ui); }
 /* 選択前後で高さが変わるとドラッグ中にグリッドがずれるので、常に居場所を取る */
 .selinfo {
@@ -510,13 +509,6 @@ body.stacked .splitter::after {
 .dropzone h2 { margin: 0 0 6px; font-size: 15px; }
 .dropzone p { margin: 0 0 14px; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .dropzone .acts { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
-.steps { margin: 16px 0 0; padding: 0; list-style: none; text-align: left; display: grid; gap: 7px; }
-.steps li { display: flex; gap: 9px; font-size: 11.5px; color: var(--ink-2); align-items: baseline; }
-.steps .n {
-  flex: none; width: 17px; height: 17px; border-radius: 50%; background: var(--sunken);
-  color: var(--ink-2); font-size: 10px; font-weight: 700; display: inline-flex;
-  align-items: center; justify-content: center; font-family: var(--font-mono);
-}
 body.filedrag .dropzone, body.filedrag .gridwrap { box-shadow: 0 0 0 2px var(--src) inset; }
 
 /* ============================================================
@@ -614,12 +606,20 @@ body.srcmax .splitter, body.dstmax .splitter { display: none; }
 /* ============================================================
    インスペクタ
    ============================================================ */
-.inspector {
+/* シートタブと選択範囲の集計を 1 本の帯にまとめる（Excel の下端と同じ並び）。
+   高さは固定。選ぶたびに高さが変わると、上のグリッドまで動いてしまう */
+.dstfoot {
+  display: flex; align-items: stretch; gap: 10px;
   border-top: 1px solid var(--line); background: var(--panel);
-  padding: 8px 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  font-size: 11.5px; flex: none;
+  font-size: 11.5px; flex: none; height: 32px;
 }
-.inspector .ttl { font-weight: 700; font-family: var(--font-mono); color: var(--dst); }
+.dstfoot .tabs { border-top: none; flex: 0 0 auto; max-width: 60%; }
+.dstfoot .cellstats {
+  flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; white-space: nowrap;
+  overflow-x: auto; justify-content: flex-end; padding: 0 12px;
+  border-left: none; scrollbar-width: none;
+}
+.dstfoot .cellstats::-webkit-scrollbar { display: none; }
 /* 選んだ範囲の集計（Excel の下端に出るあれ） */
 .cellstats {
   display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -631,8 +631,8 @@ body.srcmax .splitter, body.dstmax .splitter { display: none; }
 /* 出力側の選択枠 */
 .selbox.out { background: var(--dst-soft); border-color: var(--dst); }
 .chk { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--ink-2); }
+.chk.off { opacity: .45; cursor: not-allowed; }
 .chk input { accent-color: var(--dst); }
-.stat { color: var(--muted); font-family: var(--font-mono); }
 
 /* ============================================================
    手順書のパネル
@@ -720,7 +720,6 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
     <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xlsb,.xls,.csv" hidden>
     <button class="btn ghost" id="btnLayout" title="元データと出力シートの並べ方を切り替えます">⇅ 上下に並べる</button>
     <button class="btn" id="btnScript" title="同じ作業を使い回す手順書を開きます">手順書</button>
-    <button class="btn ghost" id="btnSample">サンプルで試す</button>
     <button class="btn" id="btnOpen">ファイルを開く</button>
     <button class="btn primary" id="btnGen" disabled>Excelを生成してダウンロード</button>
   </header>
@@ -774,13 +773,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
           <div class="acts">
             <button class="btn" id="btnOpen2">ファイルを選ぶ</button>
             <button class="btn ghost" id="btnSample2">サンプルで試す</button>
-            <button class="btn ghost" id="btnSampleDl">サンプルをダウンロード</button>
           </div>
-          <ol class="steps">
-            <li><span class="n">1</span><span>プレビュー上でセルをドラッグ、または <span class="mono">A1</span>〜<span class="mono">D10</span> のように範囲を入力して選ぶ</span></li>
-            <li><span class="n">2</span><span>選択範囲のつまみを、右の出力シートの置きたいセルへドラッグ＆ドロップ</span></li>
-            <li><span class="n">3</span><span>「Excelを生成してダウンロード」で、抜粋したブックを書き出す</span></li>
-          </ol>
         </div>
       </div>
       <div class="tabs" id="srcTabs"></div>
@@ -822,21 +815,15 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <div class="spacer"></div>
         <label class="chk"><input type="checkbox" id="optFormula"> 数式を保持</label>
         <label class="chk"><input type="checkbox" id="optMerge" checked> 結合セルを保持</label>
+        <span class="sep"></span>
+        <label class="chk" id="inspTransWrap" title="選んだブロックの行と列を入れ替えます">
+          <input type="checkbox" id="inspTrans" disabled> 行列を入れ替える</label>
+        <button class="btn sm" id="inspDel" disabled title="選んだブロックを取り除きます">削除</button>
       </div>
       <div class="gridwrap dst" id="dstGrid" tabindex="0"
            title="行・列の見出しをクリック、または Shift+ドラッグで範囲を選ぶと、個数や合計が出ます"></div>
-      <div class="inspector" id="inspector">
-        <span class="stat" id="outStat">ブロック 0 件</span>
+      <div class="dstfoot" id="dstFoot">
         <span class="cellstats" id="dstStats" hidden></span>
-        <div class="spacer"></div>
-        <span class="hint" id="inspEmpty">ブロックを選ぶと、貼り付け位置や向きを調整できます。</span>
-        <span class="ttl" id="inspTitle" hidden></span>
-        <span class="field" id="inspAnchorWrap" hidden>
-          <label for="inspAnchor">貼り付け位置</label>
-          <input class="inp w-ref" id="inspAnchor">
-        </span>
-        <label class="chk" id="inspTransWrap" hidden><input type="checkbox" id="inspTrans"> 行列を入れ替える</label>
-        <button class="btn sm" id="inspDel" hidden>削除</button>
       </div>
     </section>
   </div>
@@ -1509,12 +1496,6 @@ function loadSample() {
   var wb = sampleWorkbook();
   readWorkbook(new Uint8Array(XLSX.write(wb, { bookType: "xlsx", type: "array" })), "サンプル売上.xlsx");
 }
-function downloadSample() {
-  saveBlob(new Blob([XLSX.write(sampleWorkbook(), { bookType: "xlsx", type: "array" })],
-    { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), "サンプル売上.xlsx");
-  toast("サンプルExcelをダウンロードしました");
-}
-
 /* ============================================================
    4. 元データの描画
    ============================================================ */
@@ -1934,9 +1915,6 @@ function renderOut() {
   dstGrid.refresh();
   renderOutOverlay(cont);
   renderDstStats();
-  var n = o.blocks.length;
-  $("outStat").textContent = "ブロック " + n + " 件" +
-    (cont.maxR >= 0 ? " ／ " + (cont.maxR + 1) + "行 × " + (cont.maxC + 1) + "列" : "");
   $("btnGen").disabled = !S.wb;
   renderInspector();
   // 元データ側の「持っていった範囲」の枠もブロックから作るので、ここで一緒に描き直す
@@ -1948,7 +1926,7 @@ function renderOutTabs() {
   if (!host) {
     host = el("div", "tabs dst");
     host.id = "dstTabsHost";
-    $("dstGrid").parentNode.insertBefore(host, $("inspector"));
+    $("dstFoot").insertBefore(host, $("dstFoot").firstChild);
   }
   host.innerHTML = "";
   S.out.forEach(function (o, i) {
@@ -2091,13 +2069,14 @@ function renderDstStats() {
       }
     }
   }
+  // シートタブと同じ帯に収めるため、見出しは短くする（Excel の下端と同じ並び）
   var sz = rangeSize(g);
   var parts = [
-    ["範囲", rangeLabel(g) + "（" + sz.h + "×" + sz.w + "）"],
-    ["データの個数", String(filled)]
+    ["", rangeLabel(g) + "（" + sz.h + "×" + sz.w + "）"],
+    ["個数", String(filled)]
   ];
   if (nums) {
-    parts.push(["数値の個数", String(nums)]);
+    parts.push(["数値", String(nums)]);
     parts.push(["合計", fmtNum(sum)]);
     parts.push(["平均", fmtNum(sum / nums)]);
     parts.push(["最大", fmtNum(max)]);
@@ -2106,8 +2085,10 @@ function renderDstStats() {
   box.innerHTML = "";
   parts.forEach(function (p) {
     var w = el("span");
-    w.appendChild(el("span", "k", p[0]));
-    w.appendChild(document.createTextNode(" "));
+    if (p[0]) {
+      w.appendChild(el("span", "k", p[0]));
+      w.appendChild(document.createTextNode(" "));
+    }
     w.appendChild(el("b", null, p[1]));
     box.appendChild(w);
   });
@@ -2201,19 +2182,14 @@ function renderBlockList() {
   });
 }
 
+/** ブロックを選んでいないときは、向きと削除を押せないようにしておく
+    （隠すとツールバーの高さが変わって、下のグリッドがずれるため） */
 function renderInspector() {
   var f = S.selBlock ? findBlock(S.selBlock) : null;
-  var on = !!f;
-  $("inspEmpty").hidden = on;
-  $("inspTitle").hidden = !on;
-  $("inspAnchorWrap").hidden = !on;
-  $("inspTransWrap").hidden = !on;
-  $("inspDel").hidden = !on;
-  if (!on) return;
-  var b = f.b;
-  $("inspTitle").textContent = S.sheets[b.sheet].name + "!" + rangeLabel(b);
-  $("inspAnchor").value = a1(b.dr, b.dc);
-  $("inspTrans").checked = !!b.trans;
+  $("inspTrans").disabled = !f;
+  $("inspDel").disabled = !f;
+  $("inspTransWrap").classList.toggle("off", !f);
+  $("inspTrans").checked = !!(f && f.b.trans);
 }
 
 /* ============================================================
@@ -2927,9 +2903,7 @@ $("btnOpen").addEventListener("click", function () { $("fileInput").click(); });
 $("btnOpen2").addEventListener("click", function () { $("fileInput").click(); });
 $("fileInput").addEventListener("change", function (e) { loadFile(e.target.files[0]); e.target.value = ""; });
 $("loadClose").addEventListener("click", hideLoading);
-$("btnSample").addEventListener("click", loadSample);
 $("btnSample2").addEventListener("click", loadSample);
-$("btnSampleDl").addEventListener("click", downloadSample);
 $("btnGen").addEventListener("click", generate);
 /* --- 画面の好み（折りたたみ・並べ方）はこのブラウザに覚えておく --- */
 var PKEY = "excel-extract-prefs-v1";
@@ -3156,15 +3130,6 @@ $("outName").addEventListener("input", function () {
   renderOutTabs(); renderBlockList();
 });
 
-$("inspAnchor").addEventListener("change", function () {
-  var f = S.selBlock ? findBlock(S.selBlock) : null;
-  if (!f) return;
-  var p = parseCell(toHalf(this.value));
-  if (!p) { toast("A1 の形式で入力してください", "er"); renderInspector(); return; }
-  snapshot();
-  f.b.dr = p.r; f.b.dc = p.c;
-  renderOut(); renderBlockList();
-});
 $("inspTrans").addEventListener("change", function () {
   var f = S.selBlock ? findBlock(S.selBlock) : null;
   if (!f) return;
