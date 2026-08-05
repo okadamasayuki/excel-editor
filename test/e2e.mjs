@@ -175,7 +175,7 @@ await page.mouse.up();
 let blocks = await page.$$eval("#blockList .block-card .src", (ns) => ns.map((n) => n.textContent));
 check("ドラッグ＆ドロップでブロックが1件できる", blocks.length === 1, blocks.join(","));
 let dest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
-check("落とした位置 B3 が配置先になる", dest[0] === "抜粋1!B3", dest.join(","));
+check("落とした位置 B3 が配置先になる", dest[0] === "Sheet1!B3", dest.join(","));
 check("出力グリッドにブロック枠が描かれる", (await page.locator("#dstGrid .blockbox").count()) === 1);
 check("出力グリッドに値が流し込まれる（5×4=20セル）",
   (await page.$$eval("#dstGrid .gc", (ns) => ns.filter((n) => n.textContent.trim()).length)) === 20);
@@ -229,7 +229,7 @@ await dragSelectionToRef("A13");
 blocks = await page.$$eval("#blockList .block-card .src", (ns) => ns.map((n) => n.textContent));
 check("ドラッグでの配置でブロックが2件になる", blocks.length === 2, blocks.join(" / "));
 dest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
-check("2件目の配置先は A13", dest[1] === "抜粋1!A13", dest.join(","));
+check("2件目の配置先は A13", dest[1] === "Sheet1!A13", dest.join(","));
 
 // ---- 4b. 出力へ持っていった範囲は元データ側に残る ------------------------
 // 別のシートを見て戻ってきても消えないこと、色が出力側のブロックと同じことを確かめる
@@ -246,7 +246,7 @@ check("枠の色は出力側のブロックと同じ",
   used1.every((u) => (outs1.find((o) => o.id === u.id) || {}).bc === u.bc),
   JSON.stringify({ used: used1, out: outs1 }));
 check("行き先がラベルに入っている",
-  used1.some((u) => /→ 抜粋1!A13/.test(u.lbl)), JSON.stringify(used1.map((u) => u.lbl)));
+  used1.some((u) => /→ Sheet1!A13/.test(u.lbl)), JSON.stringify(used1.map((u) => u.lbl)));
 // 別のシートへ行くと、そのシートのぶんだけになる
 await page.click('#srcTabs .tab:nth-child(2)');
 await page.waitForTimeout(200);
@@ -266,12 +266,12 @@ await page.screenshot({
 });
 
 // ---- 5. 文章コマンド ----------------------------------------------------
-await page.evaluate(() => window.__app.runScript("支店別サマリの2行目から7行目を抜粋1のF3に置く", false));
+await page.evaluate(() => window.__app.runScript("支店別サマリの2行目から7行目をSheet1のF3に置く", false));
 blocks = await page.$$eval("#blockList .block-card .src", (ns) => ns.map((n) => n.textContent));
 check("文章コマンドで3件目が追加される", blocks.length === 3, blocks.join(" / "));
 check("コマンドの範囲解釈が正しい", blocks[2] === "支店別サマリ!A2:C7", blocks[2]);
 dest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
-check("コマンドの配置先が F3", dest[2] === "抜粋1!F3", dest[2]);
+check("コマンドの配置先が F3", dest[2] === "Sheet1!F3", dest[2]);
 
 // シート追加コマンド
 await page.evaluate(() => window.__app.runScript("シート追加 集計用", false));
@@ -305,9 +305,9 @@ await download.saveAs(outPath);
 check("ファイル名が元ファイル由来", download.suggestedFilename() === "サンプル売上_抜粋.xlsx", download.suggestedFilename());
 
 const wb = XLSX.read(readFileSync(outPath), { type: "buffer" });
-check("出力ブックのシート構成", JSON.stringify(wb.SheetNames) === JSON.stringify(["抜粋1", "集計用"]), wb.SheetNames.join(","));
+check("出力ブックのシート構成", JSON.stringify(wb.SheetNames) === JSON.stringify(["Sheet1", "集計用"]), wb.SheetNames.join(","));
 
-const ws = wb.Sheets["抜粋1"];
+const ws = wb.Sheets["Sheet1"];
 const at = (ref) => (ws[ref] ? ws[ref].v : undefined);
 // ブロック1: 売上明細!A2:D6 → B3（A2は見出し行「日付」）
 check("B3 に元の A2（日付）が入る", at("B3") === "日付", String(at("B3")));
@@ -345,7 +345,7 @@ blocks = await page.$$eval("#blockList .block-card .row2", (ns) => ns.map((n) =>
 check("転置が効く", /転置/.test(blocks[0]), blocks[0]);
 await page.keyboard.press("Control+z");
 dest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
-check("Ctrl+Z で戻せる", dest[0] === "抜粋1!B3", dest[0]);
+check("Ctrl+Z で戻せる", dest[0] === "Sheet1!B3", dest[0]);
 
 const before = await page.$$eval("#blockList .block-card", (ns) => ns.length);
 await page.click("#blockList .block-card >> nth=0 >> .icon-btn");
@@ -420,10 +420,10 @@ await loadSampleAgain();
 await page.evaluate(() => {
   const A = window.__app;
   A.S.out = []; A.S.selBlock = null;
-  A.runScript(`シート追加 抜粋1
-売上明細のA2:D6を抜粋1のB3に置く
-売上明細のA1:C3を抜粋1のA13に置く
-支店別サマリのA2:C7を抜粋1のF3に置く
+  A.runScript(`シート追加 Sheet1
+売上明細のA2:D6をSheet1のB3に置く
+売上明細のA1:C3をSheet1のA13に置く
+支店別サマリのA2:C7をSheet1のF3に置く
 シート追加 集計用
 商品マスタのA1:C7を集計用のB2に置く`, true);
 });
@@ -1215,10 +1215,10 @@ await loadSampleAgain();
 await page.evaluate(() => {
   const A = window.__app;
   A.S.out = []; A.S.selBlock = null;
-  A.runScript(`シート追加 抜粋1
-売上明細のA2:D6を抜粋1のB3に置く
-売上明細のA1:C3を抜粋1のA13に置く
-支店別サマリのA2:C7を抜粋1のF3に置く
+  A.runScript(`シート追加 Sheet1
+売上明細のA2:D6をSheet1のB3に置く
+売上明細のA1:C3をSheet1のA13に置く
+支店別サマリのA2:C7をSheet1のF3に置く
 シート追加 集計用
 商品マスタのA1:C7を集計用のB2に置く`, true);
 });
@@ -1272,8 +1272,8 @@ check("1行指示の入力欄は無くなった", (await page.locator("#cmdInput
 await page.click("#scFromBlocks");
 const generated = await page.inputValue("#scText");
 check("今の配置から手順書ができる",
-  /元ファイル: サンプル売上\.xlsx/.test(generated) && /シート追加 抜粋1/.test(generated)
-  && /を抜粋1の[A-Z]+\d+に置く/.test(generated),
+  /元ファイル: サンプル売上\.xlsx/.test(generated) && /シート追加 Sheet1/.test(generated)
+  && /をSheet1の[A-Z]+\d+に置く/.test(generated),
   generated.split("\n").filter((l) => l.trim()).slice(0, 3).join(" / "));
 
 // 繰り返し + 続けて置く。10/12/17/20 行目を 3 シートぶん縦に積む
@@ -1705,7 +1705,7 @@ check("書き出した手順書がそのまま読める文章",
   exportedText.split("\n")[0]);
 
 // 存在しないシートは黙って別シートに逃げず、行番号つきで止まる
-await page.fill("#scText", "存在しないシートのA1:B2を抜粋1のA1に置く");
+await page.fill("#scText", "存在しないシートのA1:B2をSheet1のA1に置く");
 await page.click("#scRun");
 await page.waitForTimeout(150);
 const scErrToast = await page.textContent("#toasts");
@@ -1927,7 +1927,7 @@ check("選択範囲の中を掴んでドラッグできる",
   (await page.locator("#blockList .block-card").count()) === 1,
   String(await page.locator("#blockList .block-card").count()));
 check("移動先の位置に置かれる",
-  (await page.textContent("#blockList .block-card .row2 .to")) === "抜粋1!A1",
+  (await page.textContent("#blockList .block-card .row2 .to")) === "Sheet1!A1",
   await page.textContent("#blockList .block-card .row2 .to"));
 
 // 末尾の右へ移動 → その位置へドラッグ
@@ -1936,7 +1936,7 @@ await page.click("#btnAppendRight");
 check("末尾の右は直前のブロックの右隣", (await page.evaluate(() => window.__app.S.lastGoto)) === "G1", await page.evaluate(() => window.__app.S.lastGoto));
 await dragSelectionToRef(await page.evaluate(() => window.__app.S.lastGoto));
 const appended = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
-check("末尾の下・右に並べられる", appended.join(",") === "抜粋1!A1,抜粋1!G1", appended.join(","));
+check("末尾の下・右に並べられる", appended.join(",") === "Sheet1!A1,Sheet1!G1", appended.join(","));
 
 // 置き場所を間違えたら、ブロックのどこを掴んでも動かせる
 // （直前の移動で出力側が動いているので、先頭に戻してから掴む）
@@ -1953,7 +1953,7 @@ await page.mouse.move(moveTo.x + 20, moveTo.y + 10, { steps: 14 });
 await page.mouse.move(moveTo.x + 22, moveTo.y + 12, { steps: 3 });
 await page.mouse.up();
 const movedTo = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
-check("ブロックの本体を掴んで置き直せる", movedTo.includes("抜粋1!B6"), movedTo.join(","));
+check("ブロックの本体を掴んで置き直せる", movedTo.includes("Sheet1!B6"), movedTo.join(","));
 check("ブロックは増えない（移動であって複製ではない）",
   (await page.locator("#blockList .block-card").count()) === 2,
   String(await page.locator("#blockList .block-card").count()));

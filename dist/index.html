@@ -987,7 +987,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
       <div class="toolbar">
         <div class="field">
           <label for="outName">シート名</label>
-          <input class="inp w-name" id="outName" value="抜粋1">
+          <input class="inp w-name" id="outName" value="Sheet1">
         </div>
         <button class="btn sm" id="btnAppendDown" title="出力の末尾の下まで表示を動かします（置きません）">↓ 末尾の下へ移動</button>
         <button class="btn sm" id="btnAppendRight" title="出力の末尾の右まで表示を動かします（置きません）">→ 末尾の右へ移動</button>
@@ -1618,7 +1618,7 @@ function readWorkbook(data, name) {
   S.sheets = S.sheets.concat(added);
   S.fileName = S.files[0].name;            // 書き出すときの名前は 1 つめのファイルから
   S.sel = null; S.extras = [];
-  if (!S.out.length) addOutSheet("抜粋1", true);
+  if (!S.out.length) addOutSheet("Sheet1", true);
 
   $("dropzone").hidden = true;
   $("srcGrid").hidden = false;
@@ -2236,7 +2236,7 @@ function switchSheet(i) {
    5. 出力シート
    ============================================================ */
 function addOutSheet(name, silent) {
-  var nm = name || ("抜粋" + (S.out.length + 1));
+  var nm = name || ("Sheet" + (S.out.length + 1));
   var used = {};
   S.out.forEach(function (o) { used[o.name] = 1; });
   var base = nm, k = 2;
@@ -3468,7 +3468,7 @@ function execLine(raw, ctx) {
   var wm = /^(?:(.+?)の)?([A-Za-z]{1,3}\d{1,7})\s*に\s*[「『]([\s\S]*)[」』]\s*と\s*(?:書く|書き込む|入れる|入力する?)$/.exec(wt);
   if (wm) {
     var wo = wm[1] ? useOrAddOutSheet(wm[1].trim())
-      : (ctx.last && ctx.last.out) || activeOut() || addOutSheet("抜粋1", true);
+      : (ctx.last && ctx.last.out) || activeOut() || addOutSheet("Sheet1", true);
     var wat = parseCell(wm[2]);
     if (!wat) return { err: "セル位置を読み取れません" };
     if (ctx.band && ctx.band.off) wat = { r: wat.r + ctx.band.off.r, c: wat.c + ctx.band.off.c };
@@ -3535,7 +3535,7 @@ function execLine(raw, ctx) {
   var o = outHit ? S.out[outHit.i] : null;
   if (!o && named) o = named.out;
   if (!o && cont && ctx.last) o = ctx.last.out;
-  if (!o) o = activeOut() || addOutSheet("抜粋1", true);
+  if (!o) o = activeOut() || addOutSheet("Sheet1", true);
   var dstClean = outHit ? dstTxt.replace(S.out[outHit.i].name, "") : dstTxt;
   var anchor = null;
   var am = /([A-Z]{1,3}\d{1,7})/i.exec(dstClean.replace(/\s+/g, ""));
@@ -3755,7 +3755,7 @@ function runScript(text, clearFirst, opts) {
   });
 
   S.noSnap = false; S.batch = false;
-  if (!S.out.length) addOutSheet("抜粋1", true);
+  if (!S.out.length) addOutSheet("Sheet1", true);
   renderOut(); renderBlockList();
   // 作り直したときは先頭から、書き足したときは最後に置いたところを見せる
   if (clearFirst) { $("dstGrid").scrollTop = 0; $("dstGrid").scrollLeft = 0; dstGrid.draw(); }
@@ -4428,7 +4428,7 @@ function appendAnchor(o, dir) {
 }
 /** 末尾の続きまで出力側の表示を動かす（置きはしないし、目印も残さない） */
 function gotoAppend(dir) {
-  var o = activeOut() || addOutSheet("抜粋1", true);
+  var o = activeOut() || addOutSheet("Sheet1", true);
   var at = appendAnchor(o, dir);
   // 端ぎりぎりだと落としにくいので、真ん中あたりに持ってくる
   clearGhost();
@@ -5441,7 +5441,7 @@ if (window.matchMedia) {
 }
 
 /* 初期化 */
-addOutSheet("抜粋1", true);
+addOutSheet("Sheet1", true);
 renderOutTabs();
 dstGrid.setSize(40, 24);
 dstGrid.refresh();
