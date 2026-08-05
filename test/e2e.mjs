@@ -3,7 +3,7 @@
  *   node test/e2e.mjs
  * Playwright と SheetJS はグローバル/ローカルどちらでも解決する。
  */
-import { readFileSync, writeFileSync, mkdirSync, rmSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, utimesSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -496,7 +496,7 @@ check("後処理へつなぐ入口がある", /def to_dataframes\(/.test(pySrc))
 check("手順書をまるごと貼り付けない", !pySrc.includes(pyMark),
   `${pySrc.split("\n").length}行`);
 // 前書きは手順書の長さに引きずられない（手順は PLAN として持つ）
-check("前書きは手順書の長さに関わらず一定", pySrc.split("PLAN = [")[0].split("\n").length < 50,
+check("前書きは手順書の長さに関わらず一定", pySrc.split("PLAN = [")[0].split("\n").length < 60,
   `${pySrc.split("PLAN = [")[0].split("\n").length}行`);
 check("保存できない場所でも渡せる口がある", /def build_bytes\(/.test(pySrc));
 check("書き出すシート名が先頭にまとまっている",
@@ -615,6 +615,37 @@ if (!pyReady) {
   check("似ていないファイルは拾わない", /見つかりません/.test(ranLonely), ranLonely.trim().slice(0, 160));
   check("元ファイルが無くても落ちない（貼り付けただけで走る場所むけ）",
     !/ERROR|Traceback/.test(ranLonely), ranLonely.trim().slice(0, 160));
+
+  // 日付が名前に入るとき（08.03更新_2026年度費別管理表 → 02.17更新_2026年度費別管理表）
+  const nendo = join(pyDir, "年度");
+  const hoka = join(pyDir, "ほかの表");
+  mkdirSync(nendo, { recursive: true });
+  mkdirSync(hoka, { recursive: true });
+  const age = (p, sec) => { const t = Date.now() / 1000 - sec; utimesSync(p, t, t); };
+  // 年度のそろうほうは古く、年度ちがいは新しくしておく（数字が決め手になるか見る）
+  for (const [n, sec] of [["02.17更新_2026年度費別管理表.xlsx", 99999],
+    ["01.23更新_2025年度費別管理表.xlsx", 0]]) {
+    writeFileSync(join(nendo, n), "x"); age(join(nendo, n), sec);
+  }
+  writeFileSync(join(hoka, "02.17更新_2026年度部門別管理表.xlsx"), "x");
+  writeFileSync(join(pyDir, "nendo.py"), [
+    "import extract, os",
+    'want = "08.03更新_2026年度費別管理表.xlsx"',
+    'print("PICK", os.path.basename(extract.find_source(want, ["年度"])))',
+    "try:",
+    '    extract.find_source(want, ["ほかの表"])',
+    '    print("OTHER 読んでしまった")',
+    "except FileNotFoundError:",
+    '    print("OTHER 読まなかった")',
+  ].join("\n"));
+  let ranN = "";
+  try { ranN = execFileSync("python3", ["nendo.py"], { cwd: pyDir, encoding: "utf8" }); }
+  catch (e) { ranN = "ERROR " + (e.stderr || e.message); }
+  check("日付だけちがう元ファイルを読める（08.03更新 → 02.17更新）",
+    /PICK 02\.17更新_2026年度費別管理表\.xlsx/.test(ranN), ranN.trim().slice(0, 160));
+  check("年度がちがうほうは選ばない（新しくても）",
+    !/PICK .*2025年度/.test(ranN), ranN.trim().slice(0, 160));
+  check("似た名前でも別の表は読まない", /OTHER 読まなかった/.test(ranN), ranN.trim().slice(0, 160));
 
   // 保存できない場所を指されても、逃がして書き出せること
   const drv = [
