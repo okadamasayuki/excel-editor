@@ -566,6 +566,9 @@ check("選択の右下にフィルハンドルが出る", (await page.locator("#
   await page.mouse.move(fh.x + 4, fh.y + 4);
   await page.mouse.down();
   await page.mouse.move(tg.x + tg.width / 2, tg.y + 6, { steps: 6 });
+  const hintN = await page.locator("#dstGrid .fillghost .hint").count();
+  const hintT = hintN ? await page.textContent("#dstGrid .fillghost .hint") : "(なし)";
+  check("引いている間、先端に入る値が出る", hintT === "2026/8/5", hintT);
   await page.mouse.up();
   await page.waitForTimeout(200);
 }
@@ -574,6 +577,17 @@ check("日付が1日ずつ増える", await page.evaluate(() => {
   return ["2026-08-02", "2026-08-03", "2026-08-04", "2026-08-05"]
     .every((d, i) => cs["7," + (i + 1)] && cs["7," + (i + 1)].v === d);
 }), JSON.stringify(await typedCells()));
+
+// 「末尾の右へ移動」は、フィルした行（直接入力の行）の右端を見る
+await page.click("#btnAppendRight");
+check("末尾の右へ移動が、フィルした行の右端に来る",
+  (await page.evaluate(() => window.__app.S.lastGoto)) === "F8",
+  await page.evaluate(() => window.__app.S.lastGoto));
+await page.evaluate(() => {
+  const w = document.getElementById("dstGrid");
+  w.scrollTop = 0; w.scrollLeft = 0;
+});
+await page.waitForTimeout(200);
 await page.focus("#dstGrid");
 await page.keyboard.press("Control+z");
 await page.waitForTimeout(150);
@@ -605,6 +619,9 @@ await page.waitForTimeout(120);
     const cs = window.__app.S.out[window.__app.S.activeOut].cells;
     return !!cs["30,0"];
   }), JSON.stringify(Object.keys(await typedCells()).length) + "セル");
+  check("フィルを終えても表示位置が先頭に戻らない",
+    (await page.evaluate(() => document.getElementById("dstGrid").scrollTop)) > 100,
+    String(await page.evaluate(() => document.getElementById("dstGrid").scrollTop)));
 }
 await page.focus("#dstGrid");
 await page.keyboard.press("Control+z");

@@ -699,6 +699,14 @@ body.srcmax .splitter, body.dstmax .splitter { display: none; }
   position: absolute; z-index: 24; pointer-events: none;
   border: 1.5px dashed var(--dst); border-radius: 1px; background: transparent;
 }
+/* フィルの先端に入る値（引いている間だけ） */
+.fillghost .hint {
+  position: absolute; right: -2px; bottom: -24px;
+  background: var(--dst); color: var(--surface);
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+  padding: 1px 8px; border-radius: 3px; white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+}
 .chk { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--ink-2); }
 .chk.off { opacity: .45; cursor: not-allowed; }
 .chk input { accent-color: var(--dst); }
@@ -2349,7 +2357,7 @@ function renderOut() {
   var cont = outContent(o);
   outCache = cont;
   // 中身が無いシートは先頭から見せる（前のシートの位置を引きずらない）
-  if (!o.blocks.length) { $("dstGrid").scrollTop = 0; $("dstGrid").scrollLeft = 0; }
+  if (!o.blocks.length && !hasCells(o)) { $("dstGrid").scrollTop = 0; $("dstGrid").scrollLeft = 0; }
   // 末尾の続き（+1列/+1行）も必ず入る大きさにしておく
   dstGrid.setSize(Math.max(cont.maxR + 12, 40), Math.max(cont.maxC + 8, 24));
   if (dstGrid.cols <= cont.maxC + 1 || dstGrid.rows <= cont.maxR + 1) {
@@ -2609,6 +2617,7 @@ function addBlock(src, dr, dc, outSheet) {
   o.blocks.push(b);
   S.selBlock = b.id;
   S.lastBlockId = b.id;      // 「末尾の右へ」の基準
+  S.lastPutKind = "block";
   reRender();
   return b;
 }
@@ -2960,6 +2969,7 @@ function commitCellEditor(fromBlur) {
   if (before === after) return;
   snapshot();
   if (cell) cells[key] = cell; else delete cells[key];
+  if (cell) { S.lastPutKind = "cell"; S.lastCellRow = at.r; }   // 「末尾の右へ」の基準
   renderOut(); renderBlockList();
 }
 /** 選択を 1 セルぶん動かす（入力の Enter / Tab から） */
@@ -3050,6 +3060,7 @@ function applyFill(base, dir, target) {
       }
     }
   }
+  if (wrote) { S.lastPutKind = "cell"; S.lastCellRow = dir === "down" ? target : base.r1; }
   renderOut(); renderBlockList();
   if (dir === "down") setDstSel(base.r1, base.c1, target, base.c2);
   else setDstSel(base.r1, base.c1, base.r2, target);
@@ -3078,8 +3089,26 @@ function fillTargetFromPoint(x, y) {
   if (!hit) return null;
   var downBy = hit.r - b.r2, rightBy = hit.c - b.c2;
   if (downBy <= 0 && rightBy <= 0) return null;
-  if (downBy >= rightBy) return { dir: "down", to: hit.r };
-  return { dir: "right", to: hit.c };
+  if (downBy >= rightBy) return { dir: "down", to: hit.r, at: hit.c };
+  return { dir: "right", to: hit.c, at: hit.r };
+}
+/** いまの位置まで引いたとき、先端に何が入るか（引いている間の表示に使う） */
+function fillPreview(base, dir, to, at) {
+  var o = activeOut();
+  if (!o) return null;
+  var src = [], made;
+  if (dir === "down") {
+    var c = clamp(at != null ? at : base.c1, base.c1, base.c2);
+    for (var r = base.r1; r <= base.r2; r++) src.push(sourceCellAt(o, r, c));
+    if (src.every(function (s) { return !s; })) return null;
+    made = seriesNext(src, to - base.r2, function (kk, si) { return { dr: to - (base.r1 + si), dc: 0 }; });
+  } else {
+    var r0 = clamp(at != null ? at : base.r1, base.r1, base.r2);
+    for (var c0 = base.c1; c0 <= base.c2; c0++) src.push(sourceCellAt(o, r0, c0));
+    if (src.every(function (s) { return !s; })) return null;
+    made = seriesNext(src, to - base.c2, function (kk, si) { return { dr: 0, dc: to - (base.c1 + si) }; });
+  }
+  return made ? viewCell(made).w : null;
 }
 function updateFillGhost(x, y) {
   if (!fillDrag) return;
@@ -3103,6 +3132,9 @@ function updateFillGhost(x, y) {
   fillGhostEl = el("div", "fillghost");
   fillGhostEl.style.cssText = "left:" + box.left + "px;top:" + box.top + "px;width:"
     + box.width + "px;height:" + box.height + "px;";
+  // 先端に入る値を添える（どこまで引いたか、いま何が入るかが分かる）
+  var pv = fillPreview(b, t.dir, t.to, t.at);
+  if (pv != null) fillGhostEl.appendChild(el("div", "hint", String(pv)));
   dstGrid.overlay.appendChild(fillGhostEl);
 }
 // 画面の端まで引っぱったら、そのまま送って先まで入れられるようにする
@@ -3400,6 +3432,7 @@ function execLine(raw, ctx) {
     }
     if (wfm) applyCellFormat(wcell, wfm[1].trim() === "標準" ? null : wfm[1].trim());
     outCells(wo)[wkey] = wcell;
+    S.lastPutKind = "cell"; S.lastCellRow = wat.r;
     S.activeOut = S.out.indexOf(wo);
     return { ok: true, msg: wo.name + "!" + a1(wat.r, wat.c) + " に「" + wm[3] + "」" };
   }
@@ -4297,15 +4330,24 @@ function contentBounds(o, rows) {
 }
 
 function appendAnchor(o, dir) {
-  if (!o || !o.blocks.length) return { r: 0, c: 0 };
+  if (!o || (!o.blocks.length && !hasCells(o))) return { r: 0, c: 0 };
   if (dir === "right") {
-    // 直前に置いたものの行を基準に、その行に実際に入っている値の右隣へ
-    var last = o.blocks.filter(function (b) { return b.id === S.lastBlockId; })[0]
-      || o.blocks[o.blocks.length - 1];
-    var s = rangeSize(last), h = last.trans ? s.w : s.h, w = last.trans ? s.h : s.w;
-    var band = contentBounds(o, { r0: last.dr, r1: last.dr + h - 1 });
-    var c = band.maxC >= 0 ? band.maxC + 1 : last.dc + w;
-    return { r: last.dr, c: c };
+    // 基準の行 = 最後にさわったもの。直接入力・フィルの行か、直前に置いたブロックの行
+    var r0 = null, r1 = null, fallbackC = 0;
+    if (S.lastPutKind === "cell" && S.lastCellRow != null) {
+      r0 = r1 = S.lastCellRow;
+    } else {
+      var last = o.blocks.filter(function (b) { return b.id === S.lastBlockId; })[0]
+        || o.blocks[o.blocks.length - 1];
+      if (last) {
+        var s = rangeSize(last), h = last.trans ? s.w : s.h, w = last.trans ? s.h : s.w;
+        r0 = last.dr; r1 = last.dr + h - 1; fallbackC = last.dc + w;
+      }
+    }
+    if (r0 == null) { var a2 = contentBounds(o); r0 = r1 = Math.max(a2.maxR, 0); }
+    // その行に実際に入っている値（ブロックでも直接入力でも）の右隣へ
+    var band = contentBounds(o, { r0: r0, r1: r1 });
+    return { r: r0, c: band.maxC >= 0 ? band.maxC + 1 : fallbackC };
   }
   var all = contentBounds(o);
   return {
