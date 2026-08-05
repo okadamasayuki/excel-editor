@@ -458,7 +458,8 @@ check("置き場所は聞かない（同じ場所に置く前提）",
   String(await page.locator("#pyInputs input").count()));
 // どちらが入力でどちらが出力か、見出しで分かること
 check("読み込む側と書き出す側に見出しがつく", await page.evaluate(() =>
-  [...document.querySelectorAll("#pyForm .pylabel")].map((n) => n.textContent.trim()).join(" / ")) === "読み込む Excel / 書き出す Excel",
+  [...document.querySelectorAll("#pyForm .pylabel")].map((n) => n.textContent.trim()).join(" / "))
+  === "読み込む Excel / 書き出す Excel / 書き出すシート名",
   await page.evaluate(() =>
     [...document.querySelectorAll("#pyForm .pylabel")].map((n) => n.textContent.trim()).join(" / ")));
 check("読み込む欄は元ファイルの見出しの下にある", await page.evaluate(() => {
@@ -468,6 +469,9 @@ check("読み込む欄は元ファイルの見出しの下にある", await page
 }));
 check("出力ファイル名の既定が入る",
   (await page.inputValue("#pyOut")) === "サンプル売上_抜粋.xlsx", await page.inputValue("#pyOut"));
+check("書き出すシート名も指定できる",
+  (await page.$$eval("#pySheets input", (ns) => ns.map((n) => n.value))).join(",") === "まとめ",
+  (await page.$$eval("#pySheets input", (ns) => ns.map((n) => n.value))).join(","));
 
 const pyDir = join(tmp, "py");
 mkdirSync(pyDir, { recursive: true });
@@ -495,6 +499,18 @@ check("手順書をまるごと貼り付けない", !pySrc.includes(pyMark),
 check("前書きは手順書の長さに関わらず一定", pySrc.split("PLAN = [")[0].split("\n").length < 50,
   `${pySrc.split("PLAN = [")[0].split("\n").length}行`);
 check("保存できない場所でも渡せる口がある", /def build_bytes\(/.test(pySrc));
+check("書き出すシート名が先頭にまとまっている",
+  /SHEETS = \{/.test(pySrc) && /"まとめ": "まとめ"/.test(pySrc),
+  (pySrc.match(/SHEETS = \{[^}]*\}/) || [""])[0].replace(/\s+/g, " "));
+// ネットワーク上のファイルシステム（seek が使えない）でも動くこと
+check("ファイルの読み書きは頭から一気に（seek を使わない）",
+  /def read_bytes\(/.test(pySrc) && /os\.read\(/.test(pySrc)
+  && /def write_bytes\(/.test(pySrc) && /os\.write\(/.test(pySrc));
+check("ファイルに対して seek も tell も呼ばない",
+  !/\.seek\(/.test(pySrc) && !/\.tell\(/.test(pySrc) && !/os\.lseek/.test(pySrc));
+check("組み込みの open() は使わない（os.open だけ）",
+  !/(^|[^.\w])open\(/m.test(pySrc.replace(/load_workbook|_open\(/g, "")),
+  (pySrc.match(/.*[^.\w]open\(.*/m) || [""])[0].trim());
 
 // 実際に走らせて、画面の書き出しと突き合わせる（python3 と openpyxl があるときだけ）
 let pyReady = true;
@@ -545,6 +561,33 @@ if (!pyReady) {
   }
   check("画面の書き出しと 1 セルも食い違わない", pyDiff === 0,
     `${pyCells}セル中 ${pyDiff}件ちがう ${firstDiff}`);
+
+  // 書き出すシート名を、画面とちがう名前にできること
+  await page.evaluate(() => window.__app.openScript(true));
+  await page.click("#scPy");
+  await page.waitForTimeout(150);
+  await page.fill("#pyOut", "renamed.xlsx");
+  await page.fill("#pySheets input", "月次まとめ");
+  const [dlRe] = await Promise.all([page.waitForEvent("download"), page.click("#pyOk")]);
+  await dlRe.saveAs(join(pyDir, "renamed.py"));
+  await page.evaluate(() => window.__app.openScript(false));
+  let ranRe = "";
+  try { ranRe = execFileSync("python3", ["renamed.py"], { cwd: pyDir, encoding: "utf8" }); }
+  catch (e) { ranRe = "ERROR " + (e.stderr || e.message); }
+  check("シート名を変えても走る", /書き出しました/.test(ranRe), ranRe.trim().slice(0, 120));
+  const byRe = XLSX.read(readFileSync(join(pyDir, "renamed.xlsx")), { type: "buffer" });
+  check("指定したシート名で書き出される", byRe.SheetNames.join(",") === "月次まとめ",
+    byRe.SheetNames.join(","));
+  let reDiff = 0;
+  const wsUi = byUi.Sheets["まとめ"], wsRe = byRe.Sheets["月次まとめ"] || {};
+  const rgRe = XLSX.utils.decode_range(wsUi["!ref"]);
+  for (let r = rgRe.s.r; r <= rgRe.e.r; r++) {
+    for (let c = rgRe.s.c; c <= rgRe.e.c; c++) {
+      const ad = XLSX.utils.encode_cell({ r, c });
+      if (JSON.stringify(normv(wsUi[ad] && wsUi[ad].v)) !== JSON.stringify(normv(wsRe[ad] && wsRe[ad].v))) reDiff++;
+    }
+  }
+  check("名前を変えても中身は同じ", reDiff === 0, `${reDiff}件ちがう`);
 
   // 元ファイルの名前がぶれても読めること（日付の位置ちがい・全角半角ちがい）
   const drifted = join(pyDir, "20260804更新_ｻﾝﾌﾟﾙ売上.xlsx");

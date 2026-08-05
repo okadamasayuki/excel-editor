@@ -768,7 +768,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
   background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--r-sm);
   padding: 2px 8px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.pyfields > .inp { min-width: 0; width: 100%; }
+.pyfile .inp, .pyfields > .inp { flex: 1 1 auto; min-width: 0; width: 100%; }
 @media (max-width: 720px) {
   .pygrid { grid-template-columns: minmax(0, 1fr); gap: 3px; }
   .pylabel { padding-top: 4px; }
@@ -1047,6 +1047,8 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
           <div class="pyfields">
             <input class="inp" id="pyOut" placeholder="抜粋.xlsx">
           </div>
+          <div class="pylabel" id="pySheetLabel">書き出すシート名</div>
+          <div class="pyfields" id="pySheets"></div>
         </div>
         <div class="pyfoot">
           <span class="hint">元ファイルは Python と同じ場所に置いてください。名前が多少ちがっても、いちばん近いものを読みます</span>
@@ -3846,15 +3848,17 @@ function safeSheetName(name, taken) {
   return nm;
 }
 /** 今の配置を、そのまま動く Python にする */
-function pythonFromBlocks(outName) {
+function pythonFromBlocks(outName, sheetNames) {
   var d = new Date();
   var stamp = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
     + "-" + String(d.getDate()).padStart(2, "0");
   var keepF = $("optFormula").checked, keepM = $("optMerge").checked;
-  var taken = {}, plan = [], used = {};
-  S.out.forEach(function (o) {
+  var taken = {}, takenOut = {}, plan = [], used = {}, sheets = [];
+  S.out.forEach(function (o, oi) {
     if (!o.blocks.length) return;
-    var nm = safeSheetName(o.name, taken);
+    var nm = safeSheetName(o.name, taken);                     // PLAN の中での目印
+    var want = ((sheetNames && sheetNames[oi]) || "").trim();
+    sheets.push("    " + pyStr(nm) + ": " + pyStr(safeSheetName(want || o.name, takenOut)) + ",");
     o.blocks.forEach(function (b) {
       var sh = S.sheets[b.sheet];
       if (!sh) return;
@@ -3882,6 +3886,9 @@ function pythonFromBlocks(outName) {
     "",
     "  - 元ファイルは、このノートブックと同じ場所に置いてください",
     "  - 名前は多少ちがっても大丈夫です（日付や「更新」の位置ちがいなどは吸収します）",
+    "  - ファイルの読み書きに seek（位置の移動）を使いません。",
+    "    ネットワークにつないだファイルシステムでも、そのまま動きます",
+    "    （位置の移動が要る作業は、メモリと OS の作業用フォルダの中だけで行います）",
     "  - build() で書き出し、to_dataframes() でそのまま pandas に渡せます",
     '"""',
     "from __future__ import annotations",
@@ -3903,6 +3910,10 @@ function pythonFromBlocks(outName) {
     srcLines.join("\n"),
     "]",
     "OUTPUT = " + pyStr(outName),
+    "# 書き出すシート（左が画面でのシート名、右が書き出す名前。右だけ直せば変えられます）",
+    "SHEETS = {",
+    sheets.join("\n"),
+    "}",
     'SEARCH_DIRS = ["."]      # 元ファイルを探す場所。既定は「今いるところ」',
     "",
     "KEEP_FORMULAS = " + (keepF ? "True " : "False") + "    # 数式を保持",
@@ -4020,21 +4031,65 @@ var PY_RUNNER = [
   "    return {name: find_source(name, search_dirs) for name in names}",
   "",
   "",
-  "# ── 4. 組み立て ──────────────────────────────────────────",
+  "# ── 4. 読み書き（seek を使わない） ────────────────────────",
+  "# ネットワークにつないだファイルシステム（Snowflake のワークスペースなど）は",
+  "# 位置の移動（seek）ができないことがある。ファイルは頭から一気に読み書きし、",
+  "# 位置の移動が要る zip の組み立て・取り出しは、メモリの上だけで行う。",
+  "_CHUNK = 1 << 20",
+  "_BINARY = getattr(os, \"O_BINARY\", 0)          # Windows むけ。POSIX では 0",
+  "",
+  "",
+  "def read_bytes(path: str) -> bytes:",
+  "    \"\"\"ファイルを頭から読み切る。seek も tell も使わない。\"\"\"",
+  "    fd = os.open(path, os.O_RDONLY | _BINARY)",
+  "    try:",
+  "        parts = []",
+  "        while True:",
+  "            chunk = os.read(fd, _CHUNK)",
+  "            if not chunk:",
+  "                return b\"\".join(parts)",
+  "            parts.append(chunk)",
+  "    finally:",
+  "        os.close(fd)",
+  "",
+  "",
+  "def write_bytes(path: str, data: bytes) -> str:",
+  "    \"\"\"ファイルを頭から書き切る。seek も tell も使わない。\"\"\"",
+  "    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _BINARY, 0o644)",
+  "    try:",
+  "        view = memoryview(data)",
+  "        while view:",
+  "            view = view[os.write(fd, view):]",
+  "    finally:",
+  "        os.close(fd)",
+  "    return path",
+  "",
+  "",
+  "# ── 5. 組み立て ──────────────────────────────────────────",
   "def _open(path: str, keep_formulas: bool):",
-  "    \"\"\"数式を残すときは式のまま、残さないときは計算済みの値で読む。\"\"\"",
-  "    return openpyxl.load_workbook(path, data_only=not keep_formulas)",
+  "    \"\"\"数式を残すときは式のまま、残さないときは計算済みの値で読む。",
+  "",
+  "    xlsx は zip なので、開くには位置の移動が要る。ファイルからは頭から読み切って、",
+  "    移動はメモリの上でだけ行う。",
+  "    \"\"\"",
+  "    return openpyxl.load_workbook(io.BytesIO(read_bytes(path)),",
+  "                                  data_only=not keep_formulas)",
   "",
   "",
-  "def _assemble(sources=None, keep_formulas=None, keep_merges=None, search_dirs=None):",
+  "def _assemble(sources=None, keep_formulas=None, keep_merges=None, search_dirs=None,",
+  "              sheets=None):",
   "    \"\"\"PLAN のとおりに抜き出して、1 冊のブックを組み立てる（保存はしない）。\"\"\"",
   "    keep_formulas = KEEP_FORMULAS if keep_formulas is None else keep_formulas",
   "    keep_merges = KEEP_MERGES if keep_merges is None else keep_merges",
+  "    sheets = SHEETS if sheets is None else dict(sheets)",
   "",
   "    books = {name: _open(path, keep_formulas)",
   "             for name, path in resolve_sources(sources, search_dirs).items()}",
   "    out = openpyxl.Workbook()",
   "    out.remove(out.active)",
+  "    for name in sheets.values():                    # SHEETS の名前・並び順で作る",
+  "        if name not in out.sheetnames:",
+  "            out.create_sheet(name)",
   "",
   "    for step in PLAN:",
   "        book = books.get(step[\"file\"])",
@@ -4043,7 +4098,8 @@ var PY_RUNNER = [
   "        if step[\"sheet\"] not in book.sheetnames:",
   "            raise KeyError(f'{step[\"file\"]} に シート {step[\"sheet\"]!r} がありません')",
   "        ws = book[step[\"sheet\"]]",
-  "        dst = out[step[\"out\"]] if step[\"out\"] in out.sheetnames else out.create_sheet(step[\"out\"])",
+  "        want = sheets.get(step[\"out\"], step[\"out\"])",
+  "        dst = out[want] if want in out.sheetnames else out.create_sheet(want)",
   "",
   "        c1, r1, c2, r2 = range_boundaries(step[\"src\"])          # 1 始まり",
   "        at_col, at_row = coordinate_from_string(step[\"at\"])",
@@ -4081,11 +4137,12 @@ var PY_RUNNER = [
   "    return out",
   "",
   "",
-  "# ── 5. 書き出し ──────────────────────────────────────────",
-  "def build_bytes(sources=None, keep_formulas=None, keep_merges=None, search_dirs=None) -> bytes:",
+  "# ── 6. 書き出し ──────────────────────────────────────────",
+  "def build_bytes(sources=None, keep_formulas=None, keep_merges=None, search_dirs=None,",
+  "                sheets=None) -> bytes:",
   "    \"\"\"xlsx の中身を bytes で返す。ファイルを作らないので、書けない場所でも動く。\"\"\"",
   "    buf = io.BytesIO()",
-  "    _assemble(sources, keep_formulas, keep_merges, search_dirs).save(buf)",
+  "    _assemble(sources, keep_formulas, keep_merges, search_dirs, sheets).save(buf)",
   "    return buf.getvalue()",
   "",
   "",
@@ -4103,19 +4160,18 @@ var PY_RUNNER = [
   "",
   "",
   "def build(sources=None, output=None, keep_formulas=None, keep_merges=None,",
-  "          search_dirs=None) -> str:",
+  "          search_dirs=None, sheets=None) -> str:",
   "    \"\"\"PLAN のとおりに抜き出して保存し、実際に書けた場所を返す。",
   "",
   "    保存できないフォルダ（読み取り専用のマウントなど）だったときは、",
   "    止まらずに作業用フォルダへ逃がして、その場所を知らせる。",
   "    \"\"\"",
   "    output = OUTPUT if output is None else output",
-  "    data = build_bytes(sources, keep_formulas, keep_merges, search_dirs)",
+  "    data = build_bytes(sources, keep_formulas, keep_merges, search_dirs, sheets)",
   "    failed = []",
   "    for path in _places(output):",
   "        try:",
-  "            with open(path, \"wb\") as fp:",
-  "                fp.write(data)",
+  "            write_bytes(path, data)",
   "        except OSError as err:",
   "            failed.append(f\"{path}（{err}）\")",
   "            continue",
@@ -4126,7 +4182,7 @@ var PY_RUNNER = [
   "                  + \"。build_bytes() ならファイルを作らずに中身を受け取れます\")",
   "",
   "",
-  "def to_dataframes(sources=None, keep_formulas=None, search_dirs=None):",
+  "def to_dataframes(sources=None, keep_formulas=None, search_dirs=None, sheets=None):",
   "    \"\"\"続きの加工を pandas でしたいとき。{出力シート名: DataFrame} を返す。",
   "",
   "    1 行目を見出しにはしない（画面の見え方をそのまま渡す）ので、",
@@ -4136,7 +4192,7 @@ var PY_RUNNER = [
   "    import pandas as pd                     # 使うときだけ読み込む",
   "",
   "    keep = KEEP_FORMULAS if keep_formulas is None else keep_formulas",
-  "    data = build_bytes(sources, keep_formulas, search_dirs=search_dirs)",
+  "    data = build_bytes(sources, keep_formulas, search_dirs=search_dirs, sheets=sheets)",
   "    book = openpyxl.load_workbook(io.BytesIO(data), data_only=not keep)",
   "    frames = {}",
   "    for name in book.sheetnames:",
@@ -4145,7 +4201,7 @@ var PY_RUNNER = [
   "    return frames",
   "",
   "",
-  "# ── 6. 実行 ──────────────────────────────────────────────",
+  "# ── 7. 実行 ──────────────────────────────────────────────",
   "# 貼り付けたセルがそのまま走る場所（Snowflake のノートブックなど）でも",
   "# 落ちないように、うまくいかないときは理由だけを出す。",
   "if __name__ == \"__main__\":",
@@ -4410,6 +4466,27 @@ function showPyForm() {
   });
   $("pyInLabel").textContent = names.length > 1
     ? "読み込む Excel（" + names.length + "件）" : "読み込む Excel";
+
+  // 書き出すシート名（画面のシート名が既定。ここで変えられる）
+  var sheetHost = $("pySheets");
+  sheetHost.innerHTML = "";
+  var live = 0;
+  S.out.forEach(function (o, oi) {
+    if (!o.blocks.length) return;
+    live++;
+    var row = el("div", "pyfile");
+    var inp = el("input", "inp");
+    inp.id = "pySheet" + oi;
+    inp.dataset.out = String(oi);
+    inp.value = o.name;
+    inp.placeholder = o.name;
+    inp.setAttribute("aria-label", "「" + o.name + "」を書き出すときのシート名");
+    row.appendChild(inp);
+    sheetHost.appendChild(row);
+  });
+  $("pySheetLabel").textContent = live > 1
+    ? "書き出すシート名（" + live + "枚）" : "書き出すシート名";
+
   $("pyOut").value = (S.fileName || "抜粋").replace(/\.[^.]+$/, "") + "_抜粋.xlsx";
   $("pyForm").hidden = false;
   $("scCheat").hidden = true;
@@ -4426,13 +4503,18 @@ $("pyCancel").addEventListener("click", hidePyForm);
 $("pyOk").addEventListener("click", function () {
   var outName = $("pyOut").value.trim() || "抜粋.xlsx";
   if (!/\.xlsx$/i.test(outName)) outName += ".xlsx";
-  var code = pythonFromBlocks(outName);
+  var sheetNames = {};
+  $("pySheets").querySelectorAll("input").forEach(function (n) {
+    sheetNames[n.dataset.out] = n.value;
+  });
+  var code = pythonFromBlocks(outName, sheetNames);
   var base = outName.replace(/\.[^.]+$/, "");
   saveBlob(new Blob([code], { type: "text/x-python;charset=utf-8" }), base + ".py");
   hidePyForm();
   toast(base + ".py を書き出しました。Snowflake などに貼ればそのまま動きます");
 });
-$("pyOut").addEventListener("keydown", function (e) {
+$("pyForm").addEventListener("keydown", function (e) {
+  if (e.target.tagName !== "INPUT") return;
   if (e.key === "Enter") { e.preventDefault(); $("pyOk").click(); }
   if (e.key === "Escape") { e.preventDefault(); hidePyForm(); }
 });
