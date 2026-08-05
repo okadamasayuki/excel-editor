@@ -445,7 +445,14 @@ const insPos = async () => await page.evaluate(() =>
   window.__app.S.out[window.__app.S.activeOut].blocks.map((b) => b.dr + "," + b.dc).join(" "));
 check("差し込みの前の配置", (await insPos()) === "0,0 0,6 5,0", await insPos());
 
-await page.click('#dstGrid .growh .gh[data-r="4"]');            // 5行目の見出し
+await page.click('#dstGrid .growh .gh[data-r="4"]');            // 5行目の見出し（1回目 = 選択だけ）
+await page.waitForTimeout(120);
+check("1回目のクリックは選択だけでメニューを出さない",
+  !(await page.isVisible(".hmenu")) && await page.evaluate(() => {
+    const g = window.__app.S.dsel;
+    return g && g.r1 === 4 && g.r2 === 4 && g.c1 === 0;
+  }), await page.evaluate(() => JSON.stringify(window.__app.S.dsel)));
+await page.click('#dstGrid .growh .gh[data-r="4"]');            // もう一度クリックでメニュー
 await page.waitForTimeout(120);
 check("出力の行見出しでメニューが出る", await page.isVisible(".hmenu"),
   String(await page.locator(".hmenu").count()));
@@ -468,7 +475,9 @@ await page.keyboard.press("Control+z");
 await page.waitForTimeout(150);
 check("行の差し込みも Ctrl+Z で戻せる", (await insPos()) === "0,0 0,6 5,0", await insPos());
 
-await page.click('#dstGrid .gcolh .gh[data-c="3"]');            // D列の見出し
+await page.click('#dstGrid .gcolh .gh[data-c="3"]');            // D列の見出し（選択）
+await page.waitForTimeout(120);
+await page.click('#dstGrid .gcolh .gh[data-c="3"]');            // もう一度でメニュー
 await page.waitForTimeout(120);
 check("列は左右に挿入できる",
   (await page.$$eval(".hmenu button", (ns) => ns.map((n) => n.textContent))).join(" / ")
@@ -479,9 +488,7 @@ await page.waitForTimeout(200);
 check("D列より右に始まるブロックだけ右へ", (await insPos()) === "0,0 0,7 5,0", await insPos());
 
 // 行の帯（2〜4行目）でまとめて挿入。Shift+クリックで見出しから帯を広げられる
-await page.keyboard.press("Escape");
 await page.click('#dstGrid .growh .gh[data-r="1"]');
-await page.keyboard.press("Escape");
 await page.keyboard.down("Shift");
 await page.click('#dstGrid .growh .gh[data-r="3"]');
 await page.keyboard.up("Shift");
@@ -499,6 +506,8 @@ await page.waitForTimeout(200);
 check("3行ぶんまとめて下がる", (await insPos()) === "0,0 0,7 8,0", await insPos());
 
 // 何も動かない位置では、何も変えずに知らせるだけ
+await page.click('#dstGrid .growh .gh[data-r="14"]');
+await page.waitForTimeout(120);
 await page.click('#dstGrid .growh .gh[data-r="14"]');
 await page.waitForTimeout(120);
 await page.click(".hmenu button >> nth=1");                     // 下に挿入（何もない）
@@ -572,6 +581,38 @@ check("フィルも Ctrl+Z で戻せる", await page.evaluate(() => {
   const cs = window.__app.S.out[window.__app.S.activeOut].cells;
   return cs["7,0"] && !cs["7,1"];
 }), JSON.stringify(await typedCells()));
+
+// 画面の端まで引っぱると、自動でスクロールして画面の外まで入れられる
+await page.click('#dstGrid .gc[data-r="7"][data-c="0"]');
+await page.waitForTimeout(120);
+{
+  const fh = await page.locator("#dstGrid .fillhandle").boundingBox();
+  const wrapBox = await page.locator("#dstGrid").boundingBox();
+  await page.mouse.move(fh.x + 4, fh.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(fh.x + 6, wrapBox.y + wrapBox.height - 10, { steps: 6 });
+  await page.waitForTimeout(1300);                              // 端に置いたまま送られるのを待つ
+  const during = await page.evaluate(() => ({
+    scrolled: document.getElementById("dstGrid").scrollTop,
+    rows: window.__app.dstGrid.rows,
+  }));
+  await page.mouse.move(fh.x + 7, wrapBox.y + wrapBox.height - 12);
+  await page.mouse.up();
+  await page.waitForTimeout(250);
+  check("端で止めると自動でスクロールする", during.scrolled > 100, `scrollTop=${during.scrolled}`);
+  check("表の残りが足りなければ増える", during.rows > 40, `rows=${during.rows}`);
+  check("画面の外の行まで続きが入る", await page.evaluate(() => {
+    const cs = window.__app.S.out[window.__app.S.activeOut].cells;
+    return !!cs["30,0"];
+  }), JSON.stringify(Object.keys(await typedCells()).length) + "セル");
+}
+await page.focus("#dstGrid");
+await page.keyboard.press("Control+z");
+await page.evaluate(() => {
+  const w = document.getElementById("dstGrid");
+  w.scrollTop = 0; w.scrollLeft = 0;
+});
+await page.waitForTimeout(250);
 
 // 数値2つの等差 → 下へ
 await page.dblclick('#dstGrid .gc[data-r="9"][data-c="0"]');

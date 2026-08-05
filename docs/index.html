@@ -1017,7 +1017,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         </span>
       </div>
       <div class="gridwrap dst" id="dstGrid" tabindex="0"
-           title="ダブルクリック（または F2）で値・数式・日付を直接入力。選択の右下の■を引っぱると続きが入ります。Delete で、選んだ範囲のブロックや入力をまとめて消せます"></div>
+           title="ダブルクリック（または F2）で値・数式・日付を直接入力。選択の右下の■を引っぱると続きが入ります（端まで引くと自動で送られます）。行・列の見出しは 1回目のクリックで選択、もう一度クリックで挿入メニュー。Delete で、選んだ範囲のブロックや入力をまとめて消せます"></div>
       <div class="dstfoot" id="dstFoot">
         <span class="cellstats" id="dstStats" hidden></span>
       </div>
@@ -2807,14 +2807,15 @@ function clearGhost() {
     wrap.focus();                                               // Delete などのキー操作を受け取れるように
     var cont = outCache;
     var lastR = Math.max(cont.maxR, 0), lastC = Math.max(cont.maxC, 0);
+    // 見出し: 1回目のクリックで行・列を選び、選んだところをもう一度クリックしたらメニュー
     if (hit.rawR < 0 && hit.rawC >= 0) {                                                // 列まるごと
       if (e.shiftKey && S.dsel) {                                                       // Shift で列の帯を広げる
         setDstSel(0, Math.min(S.dsel.c1, hit.c), lastR, Math.max(S.dsel.c2, hit.c));
         return;
       }
       var cb = dselBand("c", hit.c, lastR, lastC);
-      if (!cb.kept) setDstSel(0, hit.c, lastR, hit.c);
-      openDstHeaderMenu("c", cb.start, cb.n, e.clientX, e.clientY);
+      if (cb.kept) openDstHeaderMenu("c", cb.start, cb.n, e.clientX, e.clientY);
+      else setDstSel(0, hit.c, lastR, hit.c);
       return;
     }
     if (hit.rawC < 0 && hit.rawR >= 0) {                                                // 行まるごと
@@ -2823,8 +2824,8 @@ function clearGhost() {
         return;
       }
       var rb = dselBand("r", hit.r, lastR, lastC);
-      if (!rb.kept) setDstSel(hit.r, 0, hit.r, lastC);
-      openDstHeaderMenu("r", rb.start, rb.n, e.clientX, e.clientY);
+      if (rb.kept) openDstHeaderMenu("r", rb.start, rb.n, e.clientX, e.clientY);
+      else setDstSel(hit.r, 0, hit.r, lastC);
       return;
     }
     if (hit.rawR < 0 && hit.rawC < 0) { setDstSel(0, 0, lastR, lastC); return; }        // 全体
@@ -3085,12 +3086,20 @@ function fillTargetFromPoint(x, y) {
   if (downBy >= rightBy) return { dir: "down", to: hit.r };
   return { dir: "right", to: hit.c };
 }
-function moveFillDrag(e) {
+function updateFillGhost(x, y) {
   if (!fillDrag) return;
-  var t = fillTargetFromPoint(e.clientX, e.clientY);
+  var t = fillTargetFromPoint(x, y);
   fillDrag.target = t;
   clearFillGhost();
   if (!t) return;
+  // 端まで来たら、シートの続きを足してさらに引っぱれるようにする
+  if (t.dir === "down" && t.to >= dstGrid.rows - 3 && dstGrid.rows < 3000) {
+    dstGrid.setSize(dstGrid.rows + 20, dstGrid.cols);
+    dstGrid.refresh();
+  } else if (t.dir === "right" && t.to >= dstGrid.cols - 3 && dstGrid.cols < 600) {
+    dstGrid.setSize(dstGrid.rows, dstGrid.cols + 10);
+    dstGrid.refresh();
+  }
   var b = fillDrag.base;
   var g = t.dir === "down"
     ? { r1: b.r1, c1: b.c1, r2: t.to, c2: b.c2 }
@@ -3101,6 +3110,13 @@ function moveFillDrag(e) {
     + box.width + "px;height:" + box.height + "px;";
   dstGrid.overlay.appendChild(fillGhostEl);
 }
+// 画面の端まで引っぱったら、そのまま送って先まで入れられるようにする
+var fillScroll = makeEdgeScroller($("dstGrid"), function (pt) { updateFillGhost(pt.x, pt.y); });
+function moveFillDrag(e) {
+  if (!fillDrag) return;
+  fillScroll.move(e.clientX, e.clientY);
+  updateFillGhost(e.clientX, e.clientY);
+}
 function endFillDrag(e) {
   var d = fillDrag;
   cancelFillDrag(e);
@@ -3108,6 +3124,7 @@ function endFillDrag(e) {
 }
 function cancelFillDrag(e) {
   clearFillGhost();
+  fillScroll.stop();
   fillDrag = null;
   var fh = e.currentTarget;
   if (fh) {
@@ -3165,9 +3182,9 @@ function reflectCellFmt() {
 function dselBand(kind, i, lastR, lastC) {
   var g = S.dsel;
   if (g) {
-    if (kind === "c" && g.r1 === 0 && g.r2 >= lastR && i >= g.c1 && i <= g.c2 && g.c2 > g.c1)
+    if (kind === "c" && g.r1 === 0 && g.r2 >= lastR && i >= g.c1 && i <= g.c2)
       return { start: g.c1, n: g.c2 - g.c1 + 1, kept: true };
-    if (kind === "r" && g.c1 === 0 && g.c2 >= lastC && i >= g.r1 && i <= g.r2 && g.r2 > g.r1)
+    if (kind === "r" && g.c1 === 0 && g.c2 >= lastC && i >= g.r1 && i <= g.r2)
       return { start: g.r1, n: g.r2 - g.r1 + 1, kept: true };
   }
   return { start: i, n: 1, kept: false };
