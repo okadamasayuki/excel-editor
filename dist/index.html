@@ -1916,6 +1916,7 @@ function renderSrcOverlay() {
       var startDrag = function (e) {
         dragPayload = { kind: "range", sheet: S.active, r1: it.g.r1, c1: it.g.c1, r2: it.g.r2, c2: it.g.c2 };
         e.dataTransfer.effectAllowed = "copy";
+      hideDragImage(e);
         e.dataTransfer.setData("text/plain", rangeLabel(it.g));
         pendingCollapse = null;
       };
@@ -2156,6 +2157,7 @@ function renderSheetList() {
     b.addEventListener("dragstart", function (e) {
       dragPayload = { kind: "sheet", sheet: i };
       e.dataTransfer.effectAllowed = "copy";
+      hideDragImage(e);
       e.dataTransfer.setData("text/plain", sh.name);
     });
     b.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
@@ -2212,6 +2214,7 @@ function renderSrcTabs() {
     t.addEventListener("dragstart", function (e) {
       dragPayload = { kind: "sheet", sheet: i };
       e.dataTransfer.effectAllowed = "copy";
+      hideDragImage(e);
       e.dataTransfer.setData("text/plain", sh.name);
     });
     t.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
@@ -2457,6 +2460,7 @@ function renderOutOverlay(cont) {
       // ここで再描画すると掴んでいる要素が作り直されてドラッグが切れるので、状態は触らない
       dragPayload = { kind: "move", id: b.id };
       e.dataTransfer.effectAllowed = "move";
+      hideDragImage(e);
       e.dataTransfer.setData("text/plain", rangeLabel(b));
     };
     var endMove = function () { dragPayload = null; clearGhost(); };
@@ -2479,6 +2483,7 @@ function renderOutOverlay(cont) {
     tag.addEventListener("dragstart", function (e) {
       dragPayload = { kind: "move", id: b.id };
       e.dataTransfer.effectAllowed = "move";
+      hideDragImage(e);
       e.dataTransfer.setData("text/plain", rangeLabel(b));
     });
     tag.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
@@ -2725,6 +2730,7 @@ function renderBlockList() {
     card.addEventListener("dragstart", function (e) {
       dragPayload = { kind: "move", id: b.id };
       e.dataTransfer.effectAllowed = "move";
+      hideDragImage(e);
       e.dataTransfer.setData("text/plain", rangeLabel(b));
     });
     card.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
@@ -2745,6 +2751,16 @@ function renderInspector() {
    6. ドラッグ＆ドロップ（出力シートへ）
    ============================================================ */
 var dragPayload = null;
+/* つかんだ箱の半透明コピー（ブラウザ標準）を消して、点線のゴーストだけにする。
+   二重に見えて分かりにくいため。 */
+var DRAG_BLANK = (function () {
+  var c = document.createElement("canvas");
+  c.width = 1; c.height = 1;
+  return c;
+})();
+function hideDragImage(e) {
+  if (e.dataTransfer && e.dataTransfer.setDragImage) e.dataTransfer.setDragImage(DRAG_BLANK, 0, 0);
+}
 var ghostEl = null;
 var dstScroller = null;
 
