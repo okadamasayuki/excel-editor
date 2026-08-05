@@ -450,6 +450,16 @@ check("Python の書き出し欄が出る", await page.isVisible("#pyForm"));
 check("元ファイルごとに置き場所を書ける",
   (await page.$$eval("#pyInputs .fnm", (ns) => ns.map((n) => n.textContent))).join(",") === "サンプル売上.xlsx",
   (await page.$$eval("#pyInputs .fnm", (ns) => ns.map((n) => n.textContent))).join(","));
+// どちらが入力でどちらが出力か、見出しで分かること
+check("読み込む側と書き出す側に見出しがつく", await page.evaluate(() =>
+  [...document.querySelectorAll("#pyForm .pylabel")].map((n) => n.textContent.trim()).join(" / ")) === "読み込む Excel / 書き出す Excel",
+  await page.evaluate(() =>
+    [...document.querySelectorAll("#pyForm .pylabel")].map((n) => n.textContent.trim()).join(" / ")));
+check("読み込む欄は元ファイルの下にある", await page.evaluate(() => {
+  const lab = document.getElementById("pyInLabel");
+  const inp = document.querySelector("#pyInputs input");
+  return lab.getBoundingClientRect().y <= inp.getBoundingClientRect().bottom;
+}));
 check("出力ファイル名の既定が入る",
   (await page.inputValue("#pyOut")) === "サンプル売上_抜粋.xlsx", await page.inputValue("#pyOut"));
 

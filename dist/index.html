@@ -739,16 +739,28 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
 
 /* Python の書き出し */
 .pyform {
-  display: grid; gap: 8px; background: var(--dst-soft); border: 1px solid var(--dst-line);
-  border-radius: var(--r-md); padding: 9px 11px;
+  display: grid; gap: 9px; background: var(--dst-soft); border: 1px solid var(--dst-line);
+  border-radius: var(--r-md); padding: 10px 12px;
 }
-.pyrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.pyrow label { font-size: 11.5px; color: var(--ink-2); flex: none; }
-.pyrow .inp { flex: 1 1 220px; min-width: 0; }
+.pyhead, .pyfoot { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .pyttl { font-size: 12px; font-weight: 700; color: var(--dst); }
-.pyrow .fnm {
-  font-family: var(--font-mono); font-size: 11px; color: var(--dst); flex: none;
-  max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* 「読み込む」と「書き出す」を、見出しの列でそろえる */
+.pygrid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 12px; align-items: start; }
+.pylabel {
+  font-size: 11.5px; font-weight: 700; color: var(--dst); padding-top: 5px; white-space: nowrap;
+}
+.pylabel label { font: inherit; color: inherit; }
+.pyfields { display: grid; gap: 6px; min-width: 0; }
+.pyfile { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pyfile .fnm {
+  font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); flex: none;
+  max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pyfile .arw { color: var(--muted); flex: none; font-size: 11px; }
+.pyfile .inp, .pyfields > .inp { flex: 1 1 auto; min-width: 0; width: 100%; }
+@media (max-width: 720px) {
+  .pygrid { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .pylabel { padding-top: 4px; }
 }
 
 /* 手順書に書けることの一覧 */
@@ -1012,14 +1024,20 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
       </div>
 
       <div class="pyform" id="pyForm" hidden>
-        <div class="pyrow">
+        <div class="pyhead">
           <span class="pyttl">Python を書き出す</span>
           <span class="hint">今の配置と同じことをする 1 本のコードにします（openpyxl だけ使います）</span>
         </div>
-        <div class="pyrow" id="pyInputs"></div>
-        <div class="pyrow">
-          <label for="pyOut">出力ファイル</label>
-          <input class="inp" id="pyOut" placeholder="抜粋.xlsx">
+        <div class="pygrid">
+          <div class="pylabel" id="pyInLabel">読み込む Excel</div>
+          <div class="pyfields" id="pyInputs"></div>
+          <div class="pylabel"><label for="pyOut">書き出す Excel</label></div>
+          <div class="pyfields">
+            <input class="inp" id="pyOut" placeholder="抜粋.xlsx">
+          </div>
+        </div>
+        <div class="pyfoot">
+          <span class="hint">ここに書いた場所を、書き出した Python がそのまま読み書きします（あとから直せます）</span>
           <div class="spacer"></div>
           <button class="btn sm primary" id="pyOk">書き出す</button>
           <button class="btn sm" id="pyCancel">やめる</button>
@@ -4222,15 +4240,22 @@ function showPyForm() {
     var fl = S.files[sh.file];
     if (fl) used[fl.name] = 1;
   });
-  Object.keys(used).forEach(function (name, i) {
-    host.appendChild(el("span", "fnm", name));
+  var names = Object.keys(used);
+  names.forEach(function (name, i) {
+    var row = el("div", "pyfile");
+    row.appendChild(el("span", "fnm", name));
+    row.appendChild(el("span", "arw", "→"));
     var inp = el("input", "inp");
     inp.id = "pyPath" + i;
     inp.dataset.file = name;
     inp.value = name;
-    inp.placeholder = "元ファイルの置き場所（例 /stage/" + name + "）";
-    host.appendChild(inp);
+    inp.placeholder = "置き場所（例 /stage/" + name + "）";
+    inp.setAttribute("aria-label", name + " の置き場所");
+    row.appendChild(inp);
+    host.appendChild(row);
   });
+  $("pyInLabel").textContent = names.length > 1
+    ? "読み込む Excel（" + names.length + "件）" : "読み込む Excel";
   $("pyOut").value = (S.fileName || "抜粋").replace(/\.[^.]+$/, "") + "_抜粋.xlsx";
   $("pyForm").hidden = false;
   $("scCheat").hidden = true;
