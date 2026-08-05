@@ -2681,8 +2681,26 @@ function clearGhost() {
     wrap.focus();                                               // Delete などのキー操作を受け取れるように
     var cont = outCache;
     var lastR = Math.max(cont.maxR, 0), lastC = Math.max(cont.maxC, 0);
-    if (hit.rawR < 0 && hit.rawC >= 0) { setDstSel(0, hit.c, lastR, hit.c); return; }   // 列まるごと
-    if (hit.rawC < 0 && hit.rawR >= 0) { setDstSel(hit.r, 0, hit.r, lastC); return; }   // 行まるごと
+    if (hit.rawR < 0 && hit.rawC >= 0) {                                                // 列まるごと
+      if (e.shiftKey && S.dsel) {                                                       // Shift で列の帯を広げる
+        setDstSel(0, Math.min(S.dsel.c1, hit.c), lastR, Math.max(S.dsel.c2, hit.c));
+        return;
+      }
+      var cb = dselBand("c", hit.c, lastR, lastC);
+      if (!cb.kept) setDstSel(0, hit.c, lastR, hit.c);
+      openDstHeaderMenu("c", cb.start, cb.n, e.clientX, e.clientY);
+      return;
+    }
+    if (hit.rawC < 0 && hit.rawR >= 0) {                                                // 行まるごと
+      if (e.shiftKey && S.dsel) {                                                       // Shift で行の帯を広げる
+        setDstSel(Math.min(S.dsel.r1, hit.r), 0, Math.max(S.dsel.r2, hit.r), lastC);
+        return;
+      }
+      var rb = dselBand("r", hit.r, lastR, lastC);
+      if (!rb.kept) setDstSel(hit.r, 0, hit.r, lastC);
+      openDstHeaderMenu("r", rb.start, rb.n, e.clientX, e.clientY);
+      return;
+    }
     if (hit.rawR < 0 && hit.rawC < 0) { setDstSel(0, 0, lastR, lastC); return; }        // 全体
     // 何もない場所での Shift+クリックは選択の拡張。ブロックの上では選び直し
     if (e.shiftKey && S.dsel && !overBlock) { setDstSel(S.dsel.r1, S.dsel.c1, hit.r, hit.c); return; }
@@ -2715,6 +2733,72 @@ function clearGhost() {
     setDstSel(bb.dr, bb.dc, bb.dr + bh - 1, bb.dc + bw - 1);
   });
 })();
+
+/* --- 出力シートへの行・列の差し込み --- */
+/** いま選んでいるのが「行まるごと・列まるごとの帯」で、押した見出しがその中なら帯ごと扱う */
+function dselBand(kind, i, lastR, lastC) {
+  var g = S.dsel;
+  if (g) {
+    if (kind === "c" && g.r1 === 0 && g.r2 >= lastR && i >= g.c1 && i <= g.c2 && g.c2 > g.c1)
+      return { start: g.c1, n: g.c2 - g.c1 + 1, kept: true };
+    if (kind === "r" && g.c1 === 0 && g.c2 >= lastC && i >= g.r1 && i <= g.r2 && g.r2 > g.r1)
+      return { start: g.r1, n: g.r2 - g.r1 + 1, kept: true };
+  }
+  return { start: i, n: 1, kept: false };
+}
+/** 出力シートに空きの行・列を差し込む。at から先に始まるブロックを n ぶんずらす */
+function insertDstLines(kind, at, n) {
+  var o = activeOut();
+  if (!o) return;
+  n = n || 1;
+  var isRow = kind === "r";
+  var moved = 0, spanned = 0;
+  o.blocks.forEach(function (b) {
+    var sz = rangeSize(b);
+    var len = isRow ? (b.trans ? sz.w : sz.h) : (b.trans ? sz.h : sz.w);
+    var start = isRow ? b.dr : b.dc;
+    if (start >= at) moved++;
+    else if (start + len - 1 >= at) spanned++;
+  });
+  if (!moved) {
+    toast("ここから" + (isRow ? "下" : "右") + "に始まるブロックがないので、挿入しても変わりません", "wa");
+    return;
+  }
+  snapshot();
+  o.blocks.forEach(function (b) {
+    if ((isRow ? b.dr : b.dc) >= at) { if (isRow) b.dr += n; else b.dc += n; }
+  });
+  renderOut(); renderBlockList();
+  // 差し込んだ空きを選んで見せる（Ctrl+Z で戻せる）
+  var lastR = Math.max(outCache.maxR, 0), lastC = Math.max(outCache.maxC, 0);
+  if (isRow) setDstSel(at, 0, at + n - 1, lastC);
+  else setDstSel(0, at, lastR, at + n - 1);
+  var msg = (isRow ? (at + 1) + "行目" : colName(at) + "列") + "に " + n + (isRow ? "行" : "列")
+    + "ぶんの空きを入れました（" + moved + "個を" + (isRow ? "下" : "右") + "へ）";
+  if (spanned) msg += "。またいでいる " + spanned + "個はそのまま";
+  toast(msg);
+}
+/** 出力シートの行・列見出しを押したときのメニュー */
+function openDstHeaderMenu(kind, i, n, x, y) {
+  closeHeaderMenu();
+  if (!activeOut()) return;
+  var isRow = kind === "r";
+  var band = n + (isRow ? "行" : "列");
+  hmenuEl = el("div", "hmenu");
+  hmenuEl.appendChild(el("div", "ttl", n > 1
+    ? band + "を選択中"
+    : (isRow ? (i + 1) + "行目" : colName(i) + "列")));
+  var b1 = el("button", null, (isRow ? "上" : "左") + "に " + band + " 挿入");
+  b1.addEventListener("click", function () { closeHeaderMenu(); insertDstLines(kind, i, n); });
+  hmenuEl.appendChild(b1);
+  var b2 = el("button", null, (isRow ? "下" : "右") + "に " + band + " 挿入");
+  b2.addEventListener("click", function () { closeHeaderMenu(); insertDstLines(kind, i + n, n); });
+  hmenuEl.appendChild(b2);
+  document.body.appendChild(hmenuEl);
+  var w = hmenuEl.offsetWidth, h = hmenuEl.offsetHeight;
+  hmenuEl.style.left = Math.min(x, window.innerWidth - w - 8) + "px";
+  hmenuEl.style.top = Math.min(y, window.innerHeight - h - 8) + "px";
+}
 
 function dropPayload(p, r, c) {
   if (p.kind === "move") {
@@ -4610,7 +4694,7 @@ window.__app = {
   pythonFromBlocks: pythonFromBlocks, showPyForm: showPyForm,
   setZoom: setZoom, stepZoom: stepZoom, ZOOMS: ZOOMS,
   parseCell: parseCell, setMaxSrc: setMaxSrc, setMaxPane: setMaxPane, openHeaderMenu: openHeaderMenu,
-  setDstSel: setDstSel, clearDstSel: clearDstSel,
+  setDstSel: setDstSel, clearDstSel: clearDstSel, insertDstLines: insertDstLines,
   revealSelection: revealSelection,
   srcGrid: srcGrid, dstGrid: dstGrid
 };

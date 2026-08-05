@@ -430,6 +430,85 @@ await page.evaluate(() => {
 await page.waitForTimeout(250);
 await page.click("#dstTabsHost .tab >> nth=0");
 
+// ---- 7b2. 出力シートへの行・列の差し込み --------------------------------
+// 見出しをクリック → メニューから、上下・左右に空きを入れられる
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript(`シート追加 差し込み
+売上明細のA1:E3を差し込みのA1に置く
+支店別サマリのA1:C7を差し込みのG1に置く
+商品マスタのA1:C4を差し込みのA6に置く`, true);
+});
+await page.waitForTimeout(250);
+const insPos = async () => await page.evaluate(() =>
+  window.__app.S.out[window.__app.S.activeOut].blocks.map((b) => b.dr + "," + b.dc).join(" "));
+check("差し込みの前の配置", (await insPos()) === "0,0 0,6 5,0", await insPos());
+
+await page.click('#dstGrid .growh .gh[data-r="4"]');            // 5行目の見出し
+await page.waitForTimeout(120);
+check("出力の行見出しでメニューが出る", await page.isVisible(".hmenu"),
+  String(await page.locator(".hmenu").count()));
+check("上下に挿入できるメニューになっている",
+  (await page.$$eval(".hmenu button", (ns) => ns.map((n) => n.textContent))).join(" / ")
+  === "上に 1行 挿入 / 下に 1行 挿入",
+  (await page.$$eval(".hmenu button", (ns) => ns.map((n) => n.textContent))).join(" / "));
+await page.click(".hmenu button >> nth=0");                     // 上に 1行 挿入
+await page.waitForTimeout(200);
+check("5行目より下に始まるブロックだけ下がる", (await insPos()) === "0,0 0,6 6,0", await insPos());
+check("またいでいるブロックは動かないと知らせる",
+  /またいでいる 1個はそのまま/.test(await page.textContent("#toasts")),
+  (await page.textContent("#toasts")).slice(-80));
+check("差し込んだ空きの行が選ばれる", await page.evaluate(() => {
+  const g = window.__app.S.dsel;
+  return g && g.r1 === 4 && g.r2 === 4 && g.c1 === 0;
+}), await page.evaluate(() => JSON.stringify(window.__app.S.dsel)));
+await page.focus("#dstGrid");
+await page.keyboard.press("Control+z");
+await page.waitForTimeout(150);
+check("行の差し込みも Ctrl+Z で戻せる", (await insPos()) === "0,0 0,6 5,0", await insPos());
+
+await page.click('#dstGrid .gcolh .gh[data-c="3"]');            // D列の見出し
+await page.waitForTimeout(120);
+check("列は左右に挿入できる",
+  (await page.$$eval(".hmenu button", (ns) => ns.map((n) => n.textContent))).join(" / ")
+  === "左に 1列 挿入 / 右に 1列 挿入",
+  (await page.$$eval(".hmenu button", (ns) => ns.map((n) => n.textContent))).join(" / "));
+await page.click(".hmenu button >> nth=0");                     // 左に 1列 挿入
+await page.waitForTimeout(200);
+check("D列より右に始まるブロックだけ右へ", (await insPos()) === "0,0 0,7 5,0", await insPos());
+
+// 行の帯（2〜4行目）でまとめて挿入。Shift+クリックで見出しから帯を広げられる
+await page.keyboard.press("Escape");
+await page.click('#dstGrid .growh .gh[data-r="1"]');
+await page.keyboard.press("Escape");
+await page.keyboard.down("Shift");
+await page.click('#dstGrid .growh .gh[data-r="3"]');
+await page.keyboard.up("Shift");
+await page.waitForTimeout(120);
+check("Shift+クリックで行の帯を選べる", await page.evaluate(() => {
+  const g = window.__app.S.dsel;
+  return g && g.r1 === 1 && g.r2 === 3 && g.c1 === 0;
+}), await page.evaluate(() => JSON.stringify(window.__app.S.dsel)));
+await page.click('#dstGrid .growh .gh[data-r="2"]');            // 帯の中の見出し
+await page.waitForTimeout(120);
+check("帯のぶんまとめて挿入できるメニューになる",
+  /上に 3行 挿入/.test(await page.textContent(".hmenu")), await page.textContent(".hmenu"));
+await page.click(".hmenu button >> nth=0");
+await page.waitForTimeout(200);
+check("3行ぶんまとめて下がる", (await insPos()) === "0,0 0,7 8,0", await insPos());
+
+// 何も動かない位置では、何も変えずに知らせるだけ
+await page.click('#dstGrid .growh .gh[data-r="14"]');
+await page.waitForTimeout(120);
+await page.click(".hmenu button >> nth=1");                     // 下に挿入（何もない）
+await page.waitForTimeout(150);
+check("動くブロックが無いときは何も変えない", (await insPos()) === "0,0 0,7 8,0", await insPos());
+check("動かない理由を知らせる",
+  /始まるブロックがないので/.test(await page.textContent("#toasts")),
+  (await page.textContent("#toasts")).slice(-80));
+await page.keyboard.press("Escape");
+
 // ---- 7c. Python への書き出し（同じ処理を Snowflake などで動かす） --------
 // 画面が書き出す xlsx と、書き出した Python が作る xlsx が一致することまで見る
 await loadSampleAgain();
