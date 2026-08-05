@@ -167,6 +167,7 @@ check("ドラッグで A2:D6 が選択される", /A2:D6/.test(selText) && /5×4
 // ---- 3. 選択範囲を出力シートへドラッグ＆ドロップ ------------------------
 const grab = await page.locator("#srcGrid .selbox").boundingBox();
 const dstCell = await page.locator('#dstGrid .gc[data-r="2"][data-c="1"]').boundingBox();
+await page.evaluate(() => window.__app.setDstSel(13, 1, 13, 1));   // 出力側でセルを選んだ状態にしておく
 await page.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2);
 await page.mouse.down();
 await page.mouse.move(grab.x + grab.width / 2 + 50, grab.y + 24, { steps: 5 });   // まだ元データ側
@@ -174,6 +175,8 @@ check("ドラッグ中、つかんだ箱がカーソルについてくる", awai
   const f = document.querySelector(".dragfloat");
   return !!f && f.style.display !== "none";
 }));
+check("ドラッグを始めたら、出力側のセル選択は外れる", await page.evaluate(() =>
+  !window.__app.S.dsel && !document.querySelector("#dstGrid .selbox")));
 await page.mouse.move(dstCell.x + 20, dstCell.y + 10, { steps: 12 });
 check("出力側では、箱が消えてセルに吸い付く点線になる", await page.evaluate(() => {
   const f = document.querySelector(".dragfloat");
@@ -918,14 +921,17 @@ if (!pyReady) {
   catch (e) { ran = "ERROR " + (e.stderr || e.message); }
   check("書き出した Python がそのまま走る", /書き出しました/.test(ran), ran.trim().slice(0, 120));
 
-  const byUi = XLSX.read(readFileSync(join(pyDir, "by-ui.xlsx")), { type: "buffer" });
-  const byPy = XLSX.read(readFileSync(join(pyDir, "by-python.xlsx")), { type: "buffer" });
+  // sheetStubs: openpyxl の数式セルは <f>…</f><v/> と書かれ、これがないと読み飛ばされる
+  const byUi = XLSX.read(readFileSync(join(pyDir, "by-ui.xlsx")), { type: "buffer", sheetStubs: true });
+  const byPy = XLSX.read(readFileSync(join(pyDir, "by-python.xlsx")), { type: "buffer", sheetStubs: true });
   check("出力シートの顔ぶれが同じ",
     byUi.SheetNames.join(",") === byPy.SheetNames.join(","),
     byUi.SheetNames.join(",") + " / " + byPy.SheetNames.join(","));
   let pyDiff = 0, pyCells = 0, firstDiff = "";
   const normv = (v) => (v instanceof Date ? v.toISOString().slice(0, 10)
     : typeof v === "number" ? Math.round(v * 1e6) / 1e6 : v === undefined ? null : v);
+  // 数式セルは Excel が開くとき計算し直すので、仮の値ではなく数式そのもので比べる
+  const cellKey = (c) => (c && c.f ? "F=" + c.f : normv(c && c.v));
   for (const nm of byUi.SheetNames) {
     const wa = byUi.Sheets[nm], wb2 = byPy.Sheets[nm] || {};
     const rg = XLSX.utils.decode_range(wa["!ref"]);
@@ -933,7 +939,7 @@ if (!pyReady) {
       for (let c = rg.s.c; c <= rg.e.c; c++) {
         const ad = XLSX.utils.encode_cell({ r, c });
         pyCells++;
-        const va = normv(wa[ad] && wa[ad].v), vb = normv(wb2[ad] && wb2[ad].v);
+        const va = cellKey(wa[ad]), vb = cellKey(wb2[ad]);
         if (JSON.stringify(va) !== JSON.stringify(vb)) {
           if (!firstDiff) firstDiff = `${nm}!${ad} ${JSON.stringify(va)} vs ${JSON.stringify(vb)}`;
           pyDiff++;
@@ -975,7 +981,7 @@ if (!pyReady) {
   try { ranRe = execFileSync("python3", ["renamed.py"], { cwd: pyDir, encoding: "utf8" }); }
   catch (e) { ranRe = "ERROR " + (e.stderr || e.message); }
   check("シート名を変えても走る", /書き出しました/.test(ranRe), ranRe.trim().slice(0, 120));
-  const byRe = XLSX.read(readFileSync(join(pyDir, "renamed.xlsx")), { type: "buffer" });
+  const byRe = XLSX.read(readFileSync(join(pyDir, "renamed.xlsx")), { type: "buffer", sheetStubs: true });
   check("指定したシート名で書き出される", byRe.SheetNames.join(",") === "月次まとめ",
     byRe.SheetNames.join(","));
   let reDiff = 0;
@@ -984,7 +990,7 @@ if (!pyReady) {
   for (let r = rgRe.s.r; r <= rgRe.e.r; r++) {
     for (let c = rgRe.s.c; c <= rgRe.e.c; c++) {
       const ad = XLSX.utils.encode_cell({ r, c });
-      if (JSON.stringify(normv(wsUi[ad] && wsUi[ad].v)) !== JSON.stringify(normv(wsRe[ad] && wsRe[ad].v))) reDiff++;
+      if (JSON.stringify(cellKey(wsUi[ad])) !== JSON.stringify(cellKey(wsRe[ad]))) reDiff++;
     }
   }
   check("名前を変えても中身は同じ", reDiff === 0, `${reDiff}件ちがう`);
@@ -1198,11 +1204,12 @@ if (!pyReady) {
   const stRg = XLSX.utils.decode_range(stUi["!ref"]);
   const stNorm = (v) => (v instanceof Date ? v.toISOString().slice(0, 10)
     : typeof v === "number" ? Math.round(v * 1e6) / 1e6 : v === undefined || v === "" ? null : v);
+  const stKey = (c) => (c && c.f ? "F=" + c.f : stNorm(c && c.v));
   for (let r = stRg.s.r; r <= stRg.e.r; r++) {
     for (let c = stRg.s.c; c <= stRg.e.c; c++) {
       const ad = XLSX.utils.encode_cell({ r, c });
       stCells++;
-      const va = stNorm(stUi[ad] && stUi[ad].v), vb = stNorm(stPy[ad] && stPy[ad].v);
+      const va = stKey(stUi[ad]), vb = stKey(stPy[ad]);
       if (JSON.stringify(va) !== JSON.stringify(vb)) {
         if (!stFirst) stFirst = `${ad} ${JSON.stringify(va)} vs ${JSON.stringify(vb)}`;
         stDiff++;
@@ -2756,6 +2763,125 @@ check("左右に戻せる",
     const d = document.querySelector(".pane-dst").getBoundingClientRect();
     return Math.abs(s.top - d.top) < 4 && d.left > s.left;
   }));
+
+// ---- 9a. 手順書の逆算（元データ＋出来上がりの Excel → 手順書） ----------
+await loadSampleAgain();
+check("「手順書を逆算」ボタンがあり、パネルは閉じている",
+  await page.evaluate(() => !!document.getElementById("btnRev") && document.getElementById("revModal").hidden));
+
+// まず中身で往復できるか: 配置＋直接入力 → ブック → 逆算 → 実行し直し → 同じブックになる
+const revRt = await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript([
+    "シート追加 まとめ",
+    "売上明細のA1:E8をまとめのB2に置く",
+    "支店別サマリのA1:C4をまとめのB12に置く",
+    "まとめのB17に「合計チェック」と書く",
+    "まとめのC17に「12345」と書く（書式: #,##0）",
+    "まとめのD17に「2026/8/1」と書く",
+    "まとめのE17に「=SUM(C3:C8)」と書く",
+    "シート追加 予備",
+    "売上明細の2行目から5行目を予備のA1に置く",
+  ].join("\n"), true);
+  const wb1 = A.buildWorkbook();
+  const rev = A.reverseFromWb(wb1, "できあがり.xlsx");
+  A.runScript(rev.text, true);
+  const wb2 = A.buildWorkbook();
+  const dump = (wb) => {
+    const o = {};
+    wb.SheetNames.forEach((n) => {
+      const cells = {};
+      Object.keys(wb.Sheets[n]).forEach((k) => {
+        if (k[0] === "!") return;
+        const c = wb.Sheets[n][k];
+        let v = c.v;
+        if (v instanceof Date) v = "D" + Math.round((v.getTime() - Date.UTC(1899, 11, 30)) / 864e5);
+        else if (typeof v === "number") v = "N" + Math.round(v * 1e9) / 1e9;
+        cells[k] = (v == null ? "" : String(v)) + "|" + (c.f || "");
+      });
+      o[n] = cells;
+    });
+    return o;
+  };
+  const d1 = dump(wb1), d2 = dump(wb2), diffs = [];
+  for (const n of Object.keys(d1)) {
+    if (!d2[n]) { diffs.push("シートなし:" + n); continue; }
+    for (const k of new Set([...Object.keys(d1[n]), ...Object.keys(d2[n])])) {
+      if (d1[n][k] !== d2[n][k]) diffs.push(`${n}!${k} ${d1[n][k]} ≠ ${d2[n][k]}`);
+    }
+  }
+  return { text: rev.text, blocks: rev.blocks.length, writes: rev.writes, miss: rev.miss,
+    sheets1: wb1.SheetNames.join(","), sheets2: wb2.SheetNames.join(","),
+    diffs: diffs.slice(0, 5), nDiffs: diffs.length,
+    bytes: XLSX.write(wb1, { bookType: "xlsx", type: "base64" }) };
+});
+check("逆算の手順書に「置く」行ができる", /売上明細のA1:E8をまとめのB2に置く/.test(revRt.text), revRt.text.split("\n")[4]);
+check("直接入力は「…と書く」で拾われる", /まとめのB17に「合計チェック」と書く/.test(revRt.text));
+check("数値の書式も書き添えられる", /まとめのC17に「12345」と書く（書式: #,##0）/.test(revRt.text));
+check("日付はシリアル値でなく日付の文字になる", /まとめのD17に「2026\/8\/1」と書く/.test(revRt.text));
+check("数式は数式のまま拾われる", /まとめのE17に「=SUM\(C3:C8\)」と書く/.test(revRt.text));
+check("結び付かないセルは出ない", revRt.miss === 0, "miss=" + revRt.miss);
+check("逆算した手順書を実行すると同じブックに戻る",
+  revRt.nDiffs === 0 && revRt.sheets1 === revRt.sheets2,
+  `diffs=${revRt.nDiffs} ${revRt.diffs.join(" | ")} sheets ${revRt.sheets1} / ${revRt.sheets2}`);
+
+// 画面から: 出来上がりファイルを選ぶ → 推定が出る → 手順書パネルへ送れる
+const revPath = join(tmp, "できあがり.xlsx");
+writeFileSync(revPath, Buffer.from(revRt.bytes, "base64"));
+await page.evaluate(() => { window.__app.S.out = []; window.__app.S.selBlock = null; document.getElementById("scText").value = ""; });
+await page.click("#btnRev");
+check("逆算パネルが開く", await page.evaluate(() => !document.getElementById("revModal").hidden));
+await page.setInputFiles("#revFile", revPath);
+await page.waitForFunction(() => document.getElementById("revText").value.length > 0);
+const revUi = await page.evaluate(() => ({
+  text: document.getElementById("revText").value,
+  status: document.getElementById("revStatus").textContent,
+  sendOff: document.getElementById("revToScript").disabled,
+}));
+check("書き出した実ファイルからも「置く」を推定できる",
+  /売上明細のA1:E8をまとめのB2に置く/.test(revUi.text) && /支店別サマリのA1:C4をまとめのB12に置く/.test(revUi.text),
+  revUi.text.slice(0, 200));
+check("実ファイル経由でも日付は日付の文字になる", /「2026\/8\/1」と書く/.test(revUi.text), revUi.text);
+check("推定の内訳が表示される", /「置く」3件/.test(revUi.status) && /「書く」4件/.test(revUi.status), revUi.status);
+check("「手順書へ送る」が押せるようになる", !revUi.sendOff);
+await page.click("#revToScript");
+await page.waitForTimeout(150);
+const revSent = await page.evaluate(() => ({
+  revClosed: document.getElementById("revModal").hidden,
+  scOpen: !document.getElementById("scriptModal").hidden,
+  scText: document.getElementById("scText").value,
+}));
+check("送ると逆算パネルが閉じ、手順書パネルが開く", revSent.revClosed && revSent.scOpen);
+check("手順書欄に逆算した文章が入る", /売上明細のA1:E8をまとめのB2に置く/.test(revSent.scText));
+await page.click("#scRun");
+await page.waitForTimeout(250);
+check("送った手順書はそのまま実行できる",
+  await page.evaluate(() => {
+    const A = window.__app;
+    const o = A.S.out.find((x) => x.name === "まとめ");
+    return !!o && o.blocks.length === 2 && Object.keys(o.cells || {}).length === 4;
+  }));
+await page.evaluate(() => window.__app.openScript(false));
+
+// 元データに無い値だらけの出来上がりは、注記される（60 セル超）
+const strangeWs = {};
+for (let r = 0; r < 9; r++) for (let c = 0; c < 8; c++) {
+  strangeWs[XLSX.utils.encode_cell({ r, c })] = { t: "n", v: 900000 + r * 100 + c };
+}
+strangeWs["!ref"] = "A1:H9";
+const strangeWb = { SheetNames: ["謎"], Sheets: { "謎": strangeWs } };
+const strangePath = join(tmp, "謎の出来上がり.xlsx");
+writeFileSync(strangePath, Buffer.from(XLSX.write(strangeWb, { bookType: "xlsx", type: "base64" }), "base64"));
+await page.click("#btnRev");
+await page.setInputFiles("#revFile", strangePath);
+await page.waitForFunction(() => /謎/.test(document.getElementById("revText").value));
+check("結び付かないセルが多いときは注記になる",
+  await page.evaluate(() => /# ⚠ 72 セルは元データと結び付けられませんでした/.test(document.getElementById("revText").value)),
+  await page.evaluate(() => document.getElementById("revText").value.slice(0, 160)));
+check("結び付かないだけの推定では「送る」は押せない",
+  await page.evaluate(() => document.getElementById("revToScript").disabled));
+await page.evaluate(() => window.__app.openRev(false));
 
 // ---- 9b. 読み込んだExcelがブラウザに保存されないことの実測 ---------------
 const storage = await page.evaluate(async () => {

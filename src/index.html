@@ -475,7 +475,7 @@ body.stacked .splitter::after {
   white-space: nowrap; max-width: 260px; overflow: hidden;
   box-shadow: var(--shadow-sm); visibility: hidden;
 }
-.usedbox.sel .tag, .usedbox.hot .tag { visibility: visible; }
+.usedbox:hover .tag, .usedbox.hot .tag { visibility: visible; }
 :root[data-theme="dark"] .usedbox .tag { color: #14180F; }
 @media (prefers-color-scheme: dark) { .usedbox .tag { color: #14180F; } }
 :root[data-theme="light"] .usedbox .tag { color: #fff; }
@@ -894,8 +894,8 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
       <h1>Excel 抜粋エディタ</h1>
       <span class="sub">選んで、置いて、書き出す</span>
     </div>
-    <div id="fileChip" class="filechip" hidden><span class="dot"></span><b id="fileName"></b><span id="fileMeta" class="mono"></span></div>
     <div class="spacer"></div>
+    <button class="btn ghost" id="btnRev" title="いま開いている元データと、出来上がりの Excel を突き合わせて、手順書を推定します">手順書を逆算</button>
     <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xlsb,.xls,.csv" multiple hidden>
     <button class="btn ghost" id="btnLayout" title="元データと出力シートの並べ方を切り替えます">⇅ 上下に並べる</button>
     <button class="btn" id="btnScript" title="同じ作業を使い回す手順書を開きます">手順書</button>
@@ -936,6 +936,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
     <section class="pane pane-src" aria-label="元データ">
       <div class="pane-head">
         <span class="eyebrow" style="color:var(--src)">元データ</span>
+        <div id="fileChip" class="filechip" hidden><span class="dot"></span><b id="fileName"></b><span id="fileMeta" class="mono"></span></div>
         <div class="filetabs" id="srcFiles" hidden></div>
         <div class="spacer"></div>
         <button class="btn sm" id="btnMaxSrc" title="元データを画面いっぱいに表示します（Escで戻る）">⤢ 全画面</button>
@@ -1122,6 +1123,33 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
 
     </div>
   </div>
+
+  <!-- ============ 手順書の逆算（元データ＋出来上がり → 手順書を推定） ============ -->
+  <div class="modal" id="revModal" hidden role="dialog" aria-modal="true" aria-labelledby="revTitle">
+    <div class="modal-panel">
+      <div class="modal-head">
+        <span class="eyebrow" id="revTitle">手順書を逆算</span>
+        <div class="spacer"></div>
+        <button class="btn sm iconx" id="revClose" aria-label="閉じる" title="閉じる">×</button>
+      </div>
+      <p class="hint" style="margin:0">
+        いま開いている<b>元データ</b>と、<b>出来上がりの Excel</b> を突き合わせて、
+        「どこを・どこへ置いたか」を手順書として推定します。元データは先に「ファイルを開く」で開いておいてください。
+        値の一致から推定するので、転置や、元データに無い値（手で編集した結果など）は「…と書く」や # の注記になります。
+      </p>
+      <div class="rtoolbar">
+        <button class="btn sm primary" id="revPick">出来上がりの Excel を選ぶ</button>
+        <input type="file" id="revFile" accept=".xlsx,.xlsm,.xlsb,.xls,.csv" hidden>
+        <span class="hint" id="revStatus"></span>
+      </div>
+      <textarea class="script" id="revText" readonly placeholder="ここに、推定した手順書が出ます"></textarea>
+      <div class="rtoolbar">
+        <button class="btn sm primary" id="revToScript" disabled>手順書へ送る</button>
+        <span class="hint">送ったら「手順書を実行」でそのまま再現できます</span>
+      </div>
+    </div>
+  </div>
+
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
@@ -2745,7 +2773,17 @@ function removeDragFloat() {
   if (dragFloatEl && dragFloatEl.parentNode) dragFloatEl.parentNode.removeChild(dragFloatEl);
   dragFloatEl = null;
 }
+function clearDstSelQuiet() {
+  // ドラッグ開始時に呼ぶ。renderOutOverlay で作り直すとドラッグ元の要素が
+  // 消えてドラッグ自体が中断されるので、選択の箱だけをそっと外す
+  if (!S.dsel) return;
+  S.dsel = null;
+  dstGrid.overlay.querySelectorAll(".selbox, .fillhandle").forEach(function (n) { n.remove(); });
+  renderDstStats();
+  reflectCellFmt();
+}
 function hideDragImage(e) {
+  clearDstSelQuiet();
   if (e.dataTransfer && e.dataTransfer.setDragImage && DRAG_BLANK.complete) {
     e.dataTransfer.setDragImage(DRAG_BLANK, 0, 0);
   }
@@ -3829,6 +3867,254 @@ function scriptFromBlocks() {
   return L.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
 }
 
+/* ============================================================
+   7.5 手順書の逆算（元データ＋出来上がりの Excel → 手順書を推定）
+   既存の配置や画面には触らず、読み取り専用で推定だけを行う。
+   ============================================================ */
+
+/** 値をそろえて比べるための鍵。日付は Excel のシリアル値に直し、数値と同じ土俵で比べる */
+function revNorm(v) {
+  if (v == null) return null;
+  if (v instanceof Date) {
+    var s = (v.getTime() - Date.UTC(1899, 11, 30)) / 86400000;
+    return "n" + Math.round(s * 1e6) / 1e6;
+  }
+  if (typeof v === "number") return isFinite(v) ? "n" + Math.round(v * 1e9) / 1e9 : null;
+  if (typeof v === "boolean") return v ? "b1" : "b0";
+  var t = String(v);
+  return t === "" ? null : "s" + t;
+}
+
+/** SheetJS のシートを {"行,列": {k,r,c,cell}} の疎な地図にする */
+function revGrid(ws) {
+  var g = { map: {}, maxR: -1, maxC: -1 };
+  Object.keys(ws).forEach(function (addr) {
+    if (addr[0] === "!") return;
+    var cell = ws[addr];
+    if (!cell) return;
+    var k = cell.v != null ? revNorm(cell.v) : null;
+    if (k == null && cell.f) k = "f=" + cell.f;   // 値の入っていない数式セル
+    if (k == null) return;
+    var p = XLSX.utils.decode_cell(addr);
+    g.map[p.r + "," + p.c] = { k: k, r: p.r, c: p.c, cell: cell };
+    if (p.r > g.maxR) g.maxR = p.r;
+    if (p.c > g.maxC) g.maxC = p.c;
+  });
+  return g;
+}
+
+/** 日付の書式かどうか（[赤] や "文字" を除いてから y と d を探す） */
+function revDateZ(z) {
+  if (!z) return false;
+  var t = z.replace(/\[[^\]]*\]/g, "").replace(/"[^"]*"/g, "");
+  return (/y/i.test(t) && /d/i.test(t)) || /^m+[\/\-]d+$/i.test(t);
+}
+
+/** 出力セルを「…と書く」の中身の文字にする。読み直すと同じ見た目に戻ることを優先する */
+function revWriteText(cell) {
+  if (cell.f) return { txt: "=" + cell.f, z: null };
+  var v = cell.v, z = cell.z || null;
+  if (v instanceof Date) {
+    var s = Math.round((v.getTime() - Date.UTC(1899, 11, 30)) / 86400000);
+    return { txt: fmtIsoDate(serialToIso(s), "yyyy/m/d"), z: revDateZ(z) && z !== "yyyy/m/d" ? z : null };
+  }
+  if (typeof v === "boolean") return { txt: v ? "TRUE" : "FALSE", z: null };
+  // 日付の書式が付いた数値は、シリアル値ではなく日付の文字で書く
+  if (typeof v === "number" && revDateZ(z)) {
+    return { txt: fmtIsoDate(serialToIso(Math.round(v)), "yyyy/m/d"), z: z !== "yyyy/m/d" ? z : null };
+  }
+  var txt = String(v);
+  // 文字どおりに読み直して同じ書式に戻らない数値だけ、書式を書き添える
+  if (typeof v === "number" && z && z !== "General") {
+    var rt = parseCellInput(txt);
+    if (rt && (rt.z || null) !== z) return { txt: txt, z: z };
+  }
+  return { txt: txt, z: null };
+}
+
+/**
+ * 出来上がりのブック outWb と、いま開いている元データ（S.sheets）を突き合わせ、
+ * 「どこを・どこへ置いたか」を推定して手順書の文章にする。
+ * 戻り値: { text, blocks:[推定した置き方], writes:「書く」件数, miss:結び付かなかったセル数 }
+ */
+function reverseFromWb(outWb, label) {
+  // 1. 元データの値の索引（値 → どのシートのどこにあるか）と、シートごとの鍵の地図
+  var index = {}, occ = {}, srcMap = [];
+  S.sheets.forEach(function (sh, si) {
+    var m = {};
+    Object.keys(sh.ws).forEach(function (addr) {
+      if (addr[0] === "!") return;
+      var cell = sh.ws[addr];
+      if (!cell || cell.v == null) return;
+      var k = revNorm(cell.v);
+      if (k == null) return;
+      var p = XLSX.utils.decode_cell(addr);
+      m[p.r + "," + p.c] = k;
+      occ[k] = (occ[k] || 0) + 1;
+      var lst = index[k] || (index[k] = []);
+      if (lst.length < 120) lst.push({ s: si, r: p.r, c: p.c });
+    });
+    srcMap.push(m);
+  });
+
+  var L = [], blocks = [], writes = 0, miss = 0, anyOut = false;
+  L.push("# 元ファイル: " + (S.files.length
+    ? S.files.map(function (f) { return f.name; }).join(", ") : "(未読込)"));
+  if (label) L.push("# 出来上がり: " + label + " から逆算");
+  L.push("説明: 出来上がりの Excel と元データを突き合わせて推定した手順書です");
+  L.push("");
+
+  outWb.SheetNames.forEach(function (sname) {
+    var ws = outWb.Sheets[sname];
+    if (!ws) return;
+    var g = revGrid(ws);
+    var keys = Object.keys(g.map);
+    if (!keys.length) return;
+    anyOut = true;
+
+    // 2. ずらし量（元の位置→出力の位置）ごとに、値の一致で投票する
+    var votes = {};
+    keys.forEach(function (key) {
+      var e = g.map[key];
+      var lst = index[e.k];
+      if (!lst || occ[e.k] > 80) return;   // ありふれた値は手掛かりにしない
+      lst.forEach(function (p) {
+        var vk = p.s + "|" + (e.r - p.r) + "|" + (e.c - p.c);
+        votes[vk] = (votes[vk] || 0) + 1;
+      });
+    });
+    var offs = Object.keys(votes)
+      .filter(function (vk) { return votes[vk] >= 3; })
+      .sort(function (a, b) { return votes[b] - votes[a]; })
+      .slice(0, 60)
+      .map(function (vk) { var p = vk.split("|"); return { s: +p[0], dr: +p[1], dc: +p[2] }; });
+
+    // 3. 票の多いずらし量から順に、つじつまの合う長方形を切り出す
+    var claimed = {}, found = [];
+    offs.forEach(function (off) {
+      var sm = srcMap[off.s];
+      if (!sm) return;
+      // 1:一致 0:両方空 -1:食い違い
+      var matchAt = function (r, c) {
+        var e = g.map[r + "," + c];
+        var sk = (r - off.dr >= 0 && c - off.dc >= 0) ? sm[(r - off.dr) + "," + (c - off.dc)] : undefined;
+        if (!e && sk == null) return 0;
+        if (e && sk != null && e.k === sk) return 1;
+        return -1;
+      };
+      for (var r = 0; r <= g.maxR; r++) {
+        for (var c = 0; c <= g.maxC; c++) {
+          if (claimed[r + "," + c] || matchAt(r, c) !== 1) continue;
+          // 右へ、次に下へ、食い違いが出ない範囲まで広げる
+          var c2 = c;
+          while (c2 + 1 <= g.maxC && !claimed[r + "," + (c2 + 1)] && matchAt(r, c2 + 1) >= 0) c2++;
+          var r2 = r;
+          expand: while (r2 + 1 <= g.maxR) {
+            for (var cc = c; cc <= c2; cc++) {
+              if (claimed[(r2 + 1) + "," + cc] || matchAt(r2 + 1, cc) < 0) break expand;
+            }
+            r2++;
+          }
+          // 実際に一致したセルの外接まで詰める。小さすぎる一致は偶然かもしれないので拾わない
+          var mr1 = Infinity, mc1 = Infinity, mr2 = -1, mc2 = -1, hits = 0;
+          for (var rr = r; rr <= r2; rr++) for (var c3 = c; c3 <= c2; c3++) {
+            if (matchAt(rr, c3) === 1) {
+              hits++;
+              if (rr < mr1) mr1 = rr; if (rr > mr2) mr2 = rr;
+              if (c3 < mc1) mc1 = c3; if (c3 > mc2) mc2 = c3;
+            }
+          }
+          if (hits < 3) continue;
+          for (var rr2 = mr1; rr2 <= mr2; rr2++) for (var c4 = mc1; c4 <= mc2; c4++) claimed[rr2 + "," + c4] = 1;
+          found.push({ sheet: off.s, r1: mr1 - off.dr, c1: mc1 - off.dc, r2: mr2 - off.dr, c2: mc2 - off.dc, dr: mr1, dc: mc1 });
+        }
+      }
+    });
+
+    // 4. 手順書の行に起こす
+    L.push("シート追加 " + sname);
+    found.sort(function (a, b) { return a.dr - b.dr || a.dc - b.dc; });
+    found.forEach(function (b) {
+      var nm = sheetNameIsAmbiguous(b.sheet) ? sheetFullName(b.sheet) : S.sheets[b.sheet].name;
+      L.push(nm + "の" + rangeLabel(b) + "を" + sname + "の" + a1(b.dr, b.dc) + "に置く");
+      blocks.push(b);
+    });
+
+    // 5. 置くだけでは埋まらないセル。少なければ「…と書く」で拾い、多ければ注記にする
+    var rest = keys.filter(function (key) { return !claimed[key]; })
+      .map(function (key) { return g.map[key]; })
+      .sort(function (a, b) { return a.r - b.r || a.c - b.c; });
+    if (rest.length && rest.length <= 60) {
+      rest.forEach(function (e) {
+        var w = revWriteText(e.cell);
+        L.push(sname + "の" + a1(e.r, e.c) + "に「" + w.txt + "」と書く"
+          + (w.z ? "（書式: " + w.z + "）" : ""));
+        writes++;
+      });
+    } else if (rest.length) {
+      miss += rest.length;
+      L.push("# ⚠ " + rest.length + " セルは元データと結び付けられませんでした（" + a1(rest[0].r, rest[0].c) + " など）");
+    }
+    L.push("");
+  });
+
+  if (!anyOut) L.push("# （出来上がりの Excel に、値の入ったシートが見つかりませんでした）");
+  return { text: L.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n", blocks: blocks, writes: writes, miss: miss };
+}
+
+/* --- 逆算パネルの開閉と配線 --- */
+function openRev(open) {
+  $("revModal").hidden = !open;
+}
+$("btnRev").addEventListener("click", function () {
+  if (!S.sheets.length) { toast("先に「ファイルを開く」で元データを読み込んでください", "wa"); return; }
+  openRev(true);
+});
+$("revClose").addEventListener("click", function () { openRev(false); });
+$("revModal").addEventListener("pointerdown", function (e) {
+  if (e.target === $("revModal")) openRev(false);   // 外側を押したら閉じる
+});
+$("revPick").addEventListener("click", function () { $("revFile").value = ""; $("revFile").click(); });
+$("revFile").addEventListener("change", function () {
+  var f = this.files && this.files[0];
+  if (!f) return;
+  if (!S.sheets.length) { toast("先に「ファイルを開く」で元データを読み込んでください", "wa"); return; }
+  var rd = new FileReader();
+  rd.onload = function () {
+    var res;
+    try {
+      var data = new Uint8Array(rd.result);
+      var wb = /\.(csv|txt)$/i.test(f.name)
+        ? XLSX.read(decodeCsv(data), { type: "string", cellDates: true, cellNF: true })
+        : XLSX.read(data, { type: "array", cellDates: true, cellNF: true });
+      res = reverseFromWb(wb, f.name);
+    } catch (err) {
+      $("revStatus").textContent = "読み込めませんでした: " + f.name;
+      toast("「" + f.name + "」をExcelとして読み込めませんでした", "er");
+      return;
+    }
+    $("revText").value = res.text;
+    $("revStatus").textContent = "「置く」" + res.blocks.length + "件"
+      + (res.writes ? "、「書く」" + res.writes + "件" : "")
+      + (res.miss ? "、結び付かないセル " + res.miss + "個" : "") + " を推定しました";
+    $("revToScript").disabled = !res.blocks.length && !res.writes;
+  };
+  rd.onerror = function () {
+    $("revStatus").textContent = "読み込めませんでした: " + f.name;
+  };
+  rd.readAsArrayBuffer(f);
+});
+$("revToScript").addEventListener("click", function () {
+  var txt = $("revText").value.trim();
+  if (!txt) return;
+  var cur = $("scText").value.trim();
+  if (cur && !confirm("いま手順書に書かれている内容を、逆算した手順書で置き換えますか？")) return;
+  $("scText").value = txt + "\n";
+  openRev(false);
+  openScript(true);
+  toast("逆算した手順書を送りました。「実行」を押すと同じ配置を再現します");
+});
+
 /* --- 「繰り返しにする」 --- */
 
 /** 手順書の 1 行を、元データ側と置き場所側に分ける */
@@ -4123,7 +4409,8 @@ function buildWorkbook() {
       var addr = XLSX.utils.encode_cell({ r: r, c: c });
       if (ws[addr]) return;
       var cell = typed[key], nc;
-      if (cell.t === "f") nc = { t: "n", f: cell.v.slice(1) };
+      // 仮の値 0 を添えないと SheetJS が書き出しからセルごと落とす（開くと Excel が計算し直す）
+      if (cell.t === "f") nc = { t: "n", v: 0, f: cell.v.slice(1) };
       else if (cell.t === "d") nc = { t: "n", v: dateToSerial(cell.v), z: cell.z || "yyyy/m/d" };
       else if (cell.t === "n") nc = { t: "n", v: cell.v };
       else nc = { t: "s", v: String(cell.v) };
@@ -5492,6 +5779,7 @@ window.__app = {
   parseCell: parseCell, setMaxSrc: setMaxSrc, setMaxPane: setMaxPane, openHeaderMenu: openHeaderMenu,
   setDstSel: setDstSel, clearDstSel: clearDstSel, insertDstLines: insertDstLines, toast: toast,
   revealSelection: revealSelection,
+  reverseFromWb: reverseFromWb, revNorm: revNorm, openRev: openRev,
   srcGrid: srcGrid, dstGrid: dstGrid
 };
 })();
