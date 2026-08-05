@@ -743,6 +743,20 @@ body.srcmax .splitter, body.dstmax .splitter { display: none; }
 .modal-head { display: flex; align-items: center; gap: 10px; }
 .modal-head .eyebrow { font-size: 12px; color: var(--dst); letter-spacing: .08em; }
 
+/* --- 作る⇄逆算の切り替え（トグル） --- */
+.modeswitch {
+  display: inline-flex; flex: none;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  overflow: hidden; background: var(--surface);
+}
+.modeswitch .mode {
+  border: 0; background: transparent; cursor: pointer;
+  padding: 4px 12px; font-size: 12px; color: var(--muted); white-space: nowrap;
+}
+.modeswitch .mode + .mode { border-left: 1px solid var(--line); }
+.modeswitch .mode:hover { color: var(--ink); }
+.modeswitch .mode.on { background: var(--src-soft); color: var(--ink); font-weight: 600; }
+
 /* --- 逆算モードの帯 --- */
 /* 帯が出るあいだは、シェルの行を 1 本増やす（帯ぶんだけ下がる） */
 .revmode .app { grid-template-rows: auto auto minmax(0, 1fr) auto; }
@@ -918,7 +932,12 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
       <span class="sub">選んで、置いて、書き出す</span>
     </div>
     <div class="spacer"></div>
-    <button class="btn ghost" id="btnRev" title="元データと出来上がりの Excel を突き合わせて手順書を推定する、別の画面に切り替えます（いまの編集はそのまま残ります）">手順書を逆算</button>
+    <div class="modeswitch" id="modeSwitch" role="tablist" aria-label="作業の切り替え">
+      <button class="mode on" id="modeEdit" role="tab" aria-selected="true"
+              title="元データから出力シートへ、ドラッグ＆ドロップで作るいつもの画面">手順書を作る</button>
+      <button class="mode" id="modeRev" role="tab" aria-selected="false"
+              title="元データと出来上がりの Excel を突き合わせて、手順書を推定する画面（いまの編集はそのまま残ります）">手順書を逆算</button>
+    </div>
     <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xlsb,.xls,.csv" multiple hidden>
     <button class="btn ghost" id="btnLayout" title="元データと出力シートの並べ方を切り替えます">⇅ 上下に並べる</button>
     <button class="btn" id="btnScript" title="同じ作業を使い回す手順書を開きます">手順書</button>
@@ -929,10 +948,8 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
   <!-- ============ 逆算モードの帯（このモードの間だけ出る） ============ -->
   <div class="revbar" id="revBar" hidden>
     <b>手順書の逆算</b>
-    <span class="revhint">元データと、出来上がりの Excel を、それぞれの ＋ で開いてください。そろうと対応関係と手順書を推定します。いつもの編集はそのまま残っています。</span>
+    <span class="revhint">元データと、出来上がりの Excel を、それぞれの ＋ で開いてください。そろうと対応関係と手順書を推定します。「手順書を作る」に切り替えれば、いつもの編集にそのまま戻れます。</span>
     <span id="revInfo"></span>
-    <div class="spacer"></div>
-    <button class="btn sm" id="revExit">← 編集にもどる</button>
   </div>
 
   <!-- ============ 3ペイン ============ -->
@@ -4113,8 +4130,10 @@ function wsCapture() {
   };
 }
 function wsBlank() {
+  // 出力側は空の Sheet1 を 1 枚だけ持たせる（前の作業場の描画を確実に消すため）
   return { files: [], activeFile: 0, fileName: "", sheets: [], active: 0,
-    sel: null, dsel: null, extras: [], out: [], activeOut: 0, selBlock: null,
+    sel: null, dsel: null, extras: [], out: [{ id: "o0", name: "Sheet1", blocks: [] }],
+    activeOut: 0, selBlock: null,
     seq: 1, outSeq: 1, undo: [], scText: "",
     srcTop: 0, srcLeft: 0, dstTop: 0, dstLeft: 0 };
 }
@@ -4136,6 +4155,13 @@ function wsApply(w) {
   $("srcGrid").scrollTop = w.srcTop; $("srcGrid").scrollLeft = w.srcLeft;
   $("dstGrid").scrollTop = w.dstTop; $("dstGrid").scrollLeft = w.dstLeft;
 }
+/** 上のトグルに、いまどちらのモードかを映す */
+function reflectMode() {
+  $("modeEdit").classList.toggle("on", !REV.on);
+  $("modeRev").classList.toggle("on", REV.on);
+  $("modeEdit").setAttribute("aria-selected", String(!REV.on));
+  $("modeRev").setAttribute("aria-selected", String(REV.on));
+}
 function enterRev() {
   if (REV.on) return;
   closeCellEditor(false); closeHeaderMenu(); openScript(false);
@@ -4146,7 +4172,7 @@ function enterRev() {
   $("revBar").hidden = false;
   $("dstAdd").hidden = false;
   $("revInfo").textContent = "";
-  $("btnRev").textContent = "編集にもどる";
+  reflectMode();
   toast("手順書の逆算に切り替えました。元データと出来上がりを ＋ で開いてください");
 }
 function exitRev() {
@@ -4159,12 +4185,12 @@ function exitRev() {
   document.body.classList.remove("revmode");
   $("revBar").hidden = true;
   $("dstAdd").hidden = true;
-  $("btnRev").textContent = "手順書を逆算";
+  reflectMode();
   wsApply(w);
   toast("いつもの編集にもどりました");
 }
-$("btnRev").addEventListener("click", function () { REV.on ? exitRev() : enterRev(); });
-$("revExit").addEventListener("click", exitRev);
+$("modeRev").addEventListener("click", enterRev);
+$("modeEdit").addEventListener("click", exitRev);
 
 /**
  * 元データと出来上がりがそろったら、突き合わせて手順書を推定し、

@@ -2766,8 +2766,9 @@ check("左右に戻せる",
 
 // ---- 9a. 手順書の逆算（元データ＋出来上がりの Excel → 手順書） ----------
 await loadSampleAgain();
-check("「手順書を逆算」ボタンと元データ側の＋がある",
-  await page.evaluate(() => !!document.getElementById("btnRev") && !document.getElementById("srcAdd").hidden));
+check("「作る⇄逆算」のトグルと元データ側の＋がある",
+  await page.evaluate(() => !!document.getElementById("modeSwitch") && !document.getElementById("srcAdd").hidden
+    && document.getElementById("modeEdit").classList.contains("on")));
 check("ファイル名チップにシート数は出ない",
   await page.evaluate(() => !/シート/.test(document.getElementById("fileMeta").textContent)),
   await page.evaluate(() => document.getElementById("fileMeta").textContent));
@@ -2844,21 +2845,23 @@ const revBefore = await page.evaluate(() => ({
   outs: window.__app.S.out.map((o) => o.name + ":" + o.blocks.length + ":" + Object.keys(o.cells || {}).length).join(" "),
 }));
 
-await page.click("#btnRev");
+await page.click("#modeRev");
 await page.waitForTimeout(200);
 const revIn = await page.evaluate(() => ({
   on: window.__app.REV.on,
   files: window.__app.S.files.length, outs: window.__app.S.out.length,
+  blank: window.__app.S.out.every((o) => o.name === "Sheet1" && !o.blocks.length && !Object.keys(o.cells || {}).length),
   drop: !document.getElementById("dropzone").hidden,
   bar: !document.getElementById("revBar").hidden,
   dstAdd: !document.getElementById("dstAdd").hidden,
-  btn: document.getElementById("btnRev").textContent,
+  tglRev: document.getElementById("modeRev").classList.contains("on"),
+  tglEdit: document.getElementById("modeEdit").classList.contains("on"),
   sc: document.getElementById("scText").value,
 }));
 check("逆算モードに入ると、元データも出力もまっさらの別作業場になる",
-  revIn.on && revIn.files === 0 && revIn.outs === 0 && revIn.drop && revIn.sc === "", JSON.stringify(revIn));
+  revIn.on && revIn.files === 0 && revIn.outs === 1 && revIn.blank && revIn.drop && revIn.sc === "", JSON.stringify(revIn));
 check("逆算の帯と、出力側の＋が現れる", revIn.bar && revIn.dstAdd);
-check("ボタンは「編集にもどる」に変わる", revIn.btn === "編集にもどる", revIn.btn);
+check("トグルは「手順書を逆算」側が点く", revIn.tglRev && !revIn.tglEdit);
 
 // 出来上がりを先に＋で入れてもよい（預かっておいて、元データが来たら推定）
 await page.setInputFiles("#revOutFile", revPath);
@@ -2888,7 +2891,7 @@ check("出来上がりどおりに配置が再現される",
 
 // 戻ると、いつもの編集がそっくりそのまま
 await page.evaluate(() => window.__app.openScript(false));
-await page.click("#revExit");
+await page.click("#modeEdit");
 await page.waitForTimeout(250);
 const revBack = await page.evaluate(() => ({
   on: window.__app.REV.on,
@@ -2897,14 +2900,14 @@ const revBack = await page.evaluate(() => ({
   sc: document.getElementById("scText").value,
   bar: document.getElementById("revBar").hidden,
   dstAdd: document.getElementById("dstAdd").hidden,
-  btn: document.getElementById("btnRev").textContent,
+  tglEdit: document.getElementById("modeEdit").classList.contains("on"),
 }));
 check("「編集にもどる」で元の編集がそっくり戻る",
   !revBack.on && revBack.file === revBefore.file && revBack.outs === revBefore.outs,
   JSON.stringify(revBack) + " / " + JSON.stringify(revBefore));
 check("手順書の中身も元どおり", revBack.sc === "# もとの手順書メモ", revBack.sc);
-check("帯が消え、ボタンも「手順書を逆算」に戻る",
-  revBack.bar && revBack.dstAdd && revBack.btn === "手順書を逆算");
+check("帯が消え、トグルも「手順書を作る」側に戻る",
+  revBack.bar && revBack.dstAdd && revBack.tglEdit);
 
 // 元データに無い値だらけの出来上がりは、注記される（60 セル超）
 const strangeWs = {};
@@ -2915,7 +2918,7 @@ strangeWs["!ref"] = "A1:H9";
 const strangeWb = { SheetNames: ["謎"], Sheets: { "謎": strangeWs } };
 const strangePath = join(tmp, "謎の出来上がり.xlsx");
 writeFileSync(strangePath, Buffer.from(XLSX.write(strangeWb, { bookType: "xlsx", type: "base64" }), "base64"));
-await page.click("#btnRev");
+await page.click("#modeRev");
 await page.waitForTimeout(200);
 await page.setInputFiles("#fileInput", revSrcPath);
 await page.waitForFunction(() => window.__app.S.sheets.length > 0);
@@ -2928,7 +2931,7 @@ check("帯にも結び付かない数が出る",
   await page.evaluate(() => /結び付かないセル 72個/.test(document.getElementById("revInfo").textContent)),
   await page.evaluate(() => document.getElementById("revInfo").textContent));
 await page.evaluate(() => window.__app.openScript(false));
-await page.click("#revExit");
+await page.click("#modeEdit");
 await page.waitForTimeout(200);
 
 // ---- 9b. 読み込んだExcelがブラウザに保存されないことの実測 ---------------
