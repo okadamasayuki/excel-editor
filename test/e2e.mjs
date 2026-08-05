@@ -3,7 +3,7 @@
  *   node test/e2e.mjs
  * Playwright と SheetJS はグローバル/ローカルどちらでも解決する。
  */
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, renameSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -444,21 +444,27 @@ await page.evaluate(() => {
 await page.waitForTimeout(250);
 
 await page.evaluate(() => window.__app.openScript(true));
+// 手順書が長くても、書き出した Python が膨らまないこと（下で確かめる目印）
+const pyMark = "この一行はコメントとして貼り付けられてはいけない目印";
+await page.fill("#scText", `説明: ${pyMark}\n# ${pyMark}\nシート追加 まとめ`);
 await page.click("#scPy");
 await page.waitForTimeout(150);
 check("Python の書き出し欄が出る", await page.isVisible("#pyForm"));
-check("元ファイルごとに置き場所を書ける",
+check("読み込む元ファイルの名前が並ぶ",
   (await page.$$eval("#pyInputs .fnm", (ns) => ns.map((n) => n.textContent))).join(",") === "サンプル売上.xlsx",
   (await page.$$eval("#pyInputs .fnm", (ns) => ns.map((n) => n.textContent))).join(","));
+check("置き場所は聞かない（同じ場所に置く前提）",
+  (await page.locator("#pyInputs input").count()) === 0,
+  String(await page.locator("#pyInputs input").count()));
 // どちらが入力でどちらが出力か、見出しで分かること
 check("読み込む側と書き出す側に見出しがつく", await page.evaluate(() =>
   [...document.querySelectorAll("#pyForm .pylabel")].map((n) => n.textContent.trim()).join(" / ")) === "読み込む Excel / 書き出す Excel",
   await page.evaluate(() =>
     [...document.querySelectorAll("#pyForm .pylabel")].map((n) => n.textContent.trim()).join(" / ")));
-check("読み込む欄は元ファイルの下にある", await page.evaluate(() => {
+check("読み込む欄は元ファイルの見出しの下にある", await page.evaluate(() => {
   const lab = document.getElementById("pyInLabel");
-  const inp = document.querySelector("#pyInputs input");
-  return lab.getBoundingClientRect().y <= inp.getBoundingClientRect().bottom;
+  const box = document.querySelector("#pyInputs .fnm");
+  return lab.getBoundingClientRect().y <= box.getBoundingClientRect().bottom;
 }));
 check("出力ファイル名の既定が入る",
   (await page.inputValue("#pyOut")) === "サンプル売上_抜粋.xlsx", await page.inputValue("#pyOut"));
@@ -471,14 +477,24 @@ check("Python として書き出せる", dlPy.suggestedFilename() === "by-python
 await dlPy.saveAs(join(pyDir, "extract.py"));
 const pySrc = readFileSync(join(pyDir, "extract.py"), "utf8");
 check("入出力が先頭にまとまっている",
-  /SOURCES = \{/.test(pySrc) && /OUTPUT = "by-python\.xlsx"/.test(pySrc), pySrc.slice(0, 60));
+  /SOURCES = \[/.test(pySrc) && /OUTPUT = "by-python\.xlsx"/.test(pySrc), pySrc.slice(0, 60));
 check("配置が手順として並ぶ",
   (pySrc.match(/^\s+\{"out":/gm) || []).length === 3,
   String((pySrc.match(/^\s+\{"out":/gm) || []).length));
 check("転置も引き継がれる", /"transpose": True/.test(pySrc));
-check("openpyxl 以外は要らない",
-  !/^import (?!openpyxl|from)/m.test(pySrc) && /import openpyxl/.test(pySrc));
+const pyImports = [...pySrc.matchAll(/^(?:import|from) ([\w.]+)/gm)].map((m) => m[1]);
+const pyStd = ["__future__", "difflib", "io", "os", "re", "tempfile", "unicodedata"];
+check("外から入れるのは openpyxl だけ",
+  pyImports.includes("openpyxl")
+  && pyImports.every((m) => m === "openpyxl" || m.startsWith("openpyxl.") || pyStd.includes(m)),
+  pyImports.join(","));
 check("後処理へつなぐ入口がある", /def to_dataframes\(/.test(pySrc));
+check("手順書をまるごと貼り付けない", !pySrc.includes(pyMark),
+  `${pySrc.split("\n").length}行`);
+// 前書きは手順書の長さに引きずられない（手順は PLAN として持つ）
+check("前書きは手順書の長さに関わらず一定", pySrc.split("PLAN = [")[0].split("\n").length < 50,
+  `${pySrc.split("PLAN = [")[0].split("\n").length}行`);
+check("保存できない場所でも渡せる口がある", /def build_bytes\(/.test(pySrc));
 
 // 実際に走らせて、画面の書き出しと突き合わせる（python3 と openpyxl があるときだけ）
 let pyReady = true;
@@ -529,6 +545,49 @@ if (!pyReady) {
   }
   check("画面の書き出しと 1 セルも食い違わない", pyDiff === 0,
     `${pyCells}セル中 ${pyDiff}件ちがう ${firstDiff}`);
+
+  // 元ファイルの名前がぶれても読めること（日付の位置ちがい・全角半角ちがい）
+  const drifted = join(pyDir, "20260804更新_ｻﾝﾌﾟﾙ売上.xlsx");
+  renameSync(uiPath, drifted);
+  rmSync(join(pyDir, "by-python.xlsx"), { force: true });
+  let ranDrift = "";
+  try { ranDrift = execFileSync("python3", ["extract.py"], { cwd: pyDir, encoding: "utf8" }); }
+  catch (e) { ranDrift = "ERROR " + (e.stderr || e.message); }
+  check("名前がぶれた元ファイルでも読める", /書き出しました/.test(ranDrift), ranDrift.trim().slice(0, 160));
+  check("どのファイルを読んだか知らせる", /のかわりに .*ｻﾝﾌﾟﾙ売上|のかわりに .*サンプル売上/.test(ranDrift),
+    ranDrift.trim().slice(0, 160));
+  const byDrift = XLSX.read(readFileSync(join(pyDir, "by-python.xlsx")), { type: "buffer" });
+  check("名前がぶれても中身は同じ", byDrift.SheetNames.join(",") === byUi.SheetNames.join(","),
+    byDrift.SheetNames.join(","));
+  renameSync(drifted, uiPath);
+
+  // 別ものは拾わない（似ていないファイルしか無ければ、理由を言って止まる）
+  const lonely = join(pyDir, "ひとりぼっち");
+  mkdirSync(lonely, { recursive: true });
+  writeFileSync(join(lonely, "まったく別の資料.xlsx"), readFileSync(join(pyDir, "by-ui.xlsx")));
+  writeFileSync(join(lonely, "extract.py"), pySrc);
+  let ranLonely = "";
+  try { ranLonely = execFileSync("python3", ["extract.py"], { cwd: lonely, encoding: "utf8" }); }
+  catch (e) { ranLonely = "ERROR " + (e.stderr || e.message); }
+  check("似ていないファイルは拾わない", /見つかりません/.test(ranLonely), ranLonely.trim().slice(0, 160));
+  check("元ファイルが無くても落ちない（貼り付けただけで走る場所むけ）",
+    !/ERROR|Traceback/.test(ranLonely), ranLonely.trim().slice(0, 160));
+
+  // 保存できない場所を指されても、逃がして書き出せること
+  const drv = [
+    "import extract, os",
+    `p = extract.build(output=os.path.join("no-such-folder", "out.xlsx"))`,
+    'print("SAVED", os.path.basename(p), os.path.isfile(p))',
+    'print("BYTES", len(extract.build_bytes()))',
+  ].join("\n");
+  writeFileSync(join(pyDir, "drive.py"), drv);
+  let ranSave = "";
+  try { ranSave = execFileSync("python3", ["drive.py"], { cwd: pyDir, encoding: "utf8" }); }
+  catch (e) { ranSave = "ERROR " + (e.stderr || e.message); }
+  check("書けない場所なら別の場所へ逃がす", /SAVED out\.xlsx True/.test(ranSave), ranSave.trim().slice(0, 160));
+  check("逃がしたことを知らせる", /には書けなかったので/.test(ranSave), ranSave.trim().slice(0, 160));
+  check("ファイルを作らずに中身だけ受け取れる",
+    Number((ranSave.match(/BYTES (\d+)/) || [])[1] || 0) > 3000, (ranSave.match(/BYTES \d+/) || [])[0]);
 }
 await page.evaluate(() => window.__app.openScript(false));
 await loadSampleAgain();

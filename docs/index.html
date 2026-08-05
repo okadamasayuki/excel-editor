@@ -761,13 +761,14 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
 }
 .pylabel label { font: inherit; color: inherit; }
 .pyfields { display: grid; gap: 6px; min-width: 0; }
-.pyfile { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 読み込む元ファイルは「決まっていること」なので、書き換えられない札で見せる */
+.pyfile { display: flex; align-items: center; gap: 8px; min-width: 0; padding-top: 3px; }
 .pyfile .fnm {
-  font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); flex: none;
-  max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono); font-size: 11px; color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--r-sm);
+  padding: 2px 8px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.pyfile .arw { color: var(--muted); flex: none; font-size: 11px; }
-.pyfile .inp, .pyfields > .inp { flex: 1 1 auto; min-width: 0; width: 100%; }
+.pyfields > .inp { min-width: 0; width: 100%; }
 @media (max-width: 720px) {
   .pygrid { grid-template-columns: minmax(0, 1fr); gap: 3px; }
   .pylabel { padding-top: 4px; }
@@ -1048,7 +1049,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
           </div>
         </div>
         <div class="pyfoot">
-          <span class="hint">ここに書いた場所を、書き出した Python がそのまま読み書きします（あとから直せます）</span>
+          <span class="hint">元ファイルは Python と同じ場所に置いてください。名前が多少ちがっても、いちばん近いものを読みます</span>
           <div class="spacer"></div>
           <button class="btn sm primary" id="pyOk">書き出す</button>
           <button class="btn sm" id="pyCancel">やめる</button>
@@ -3845,7 +3846,7 @@ function safeSheetName(name, taken) {
   return nm;
 }
 /** 今の配置を、そのまま動く Python にする */
-function pythonFromBlocks(paths, outName) {
+function pythonFromBlocks(outName) {
   var d = new Date();
   var stamp = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
     + "-" + String(d.getDate()).padStart(2, "0");
@@ -3865,46 +3866,48 @@ function pythonFromBlocks(paths, outName) {
         + ', "at": ' + pyStr(a1(b.dr, b.dc)) + ', "transpose": ' + (b.trans ? "True" : "False") + "},");
     });
   });
-  var srcLines = Object.keys(used).map(function (n) {
-    return "    " + pyStr(n) + ": " + pyStr((paths && paths[n]) || n) + ",";
-  });
-  var recipe = ($("scText").value || "").trim();
-  var recipeBlock = recipe
-    ? "\n手順書（画面で書いたもの。下の PLAN はこれを実行した結果です）\n"
-      + "----------------------------------------------------------\n" + recipe + "\n"
-    : "";
+  var names = Object.keys(used);
+  var srcLines = names.map(function (n) { return "    " + pyStr(n) + ","; });
 
   return [
     "# -*- coding: utf-8 -*-",
     '"""Excel 抜粋エディタ が書き出した処理です。',
     "",
     "  書き出した日: " + stamp,
-    "  元ファイル  : " + Object.keys(used).join(", "),
-    "  出力        : " + outName,
+    "  読み込む    : " + names.join(", "),
+    "  書き出す    : " + outName,
     "",
     "画面でやっているのと同じ抜き出しを、この 1 本だけで行います。",
-    "openpyxl のほかに必要なものはありません（Snowflake のノートブックでもそのまま動きます）。",
+    "外から入れるものは openpyxl だけです（Snowflake のノートブックでもそのまま動きます）。",
     "",
-    "  1. 下の SOURCES に、元ファイルの置き場所を書く",
-    "  2. build() を呼ぶと OUTPUT に書き出す",
-    "  3. 続きの加工をするときは to_dataframes() で pandas に渡す",
-    escapePyDoc(recipeBlock),
+    "  - 元ファイルは、このノートブックと同じ場所に置いてください",
+    "  - 名前は多少ちがっても大丈夫です（日付や「更新」の位置ちがいなどは吸収します）",
+    "  - build() で書き出し、to_dataframes() でそのまま pandas に渡せます",
     '"""',
     "from __future__ import annotations",
+    "",
+    "import difflib",
+    "import io",
+    "import os",
+    "import re",
+    "import tempfile",
+    "import unicodedata",
     "",
     "import openpyxl",
     "from openpyxl.utils import column_index_from_string, get_column_letter",
     "from openpyxl.utils.cell import coordinate_from_string, range_boundaries",
     "",
     "# ── 1. 入出力 ────────────────────────────────────────────",
-    "# 手順書に出てくるファイル名 → 実際の置き場所",
-    "SOURCES = {",
+    "# 読み込む元ファイル（この名前どおりでなくても、いちばん近いものを選びます）",
+    "SOURCES = [",
     srcLines.join("\n"),
-    "}",
+    "]",
     "OUTPUT = " + pyStr(outName),
+    'SEARCH_DIRS = ["."]      # 元ファイルを探す場所。既定は「今いるところ」',
     "",
-    "KEEP_FORMULAS = " + (keepF ? "True" : "False") + "   # 数式を保持",
-    "KEEP_MERGES   = " + (keepM ? "True" : "False") + "   # 結合セルを保持",
+    "KEEP_FORMULAS = " + (keepF ? "True " : "False") + "    # 数式を保持",
+    "KEEP_MERGES   = " + (keepM ? "True " : "False") + "    # 結合セルを保持",
+    "VERBOSE       = True     # どのファイルを読み、どこへ書いたかを表示する",
     "",
     "# ── 2. 手順（画面の配置そのまま） ─────────────────────────",
     "# out=出力シート名 / file,sheet,src=元データ / at=置き場所 / transpose=行列の入れ替え",
@@ -3915,32 +3918,128 @@ function pythonFromBlocks(paths, outName) {
     PY_RUNNER
   ].join("\n");
 }
-/** 手順書の中の """ を無害にする（docstring を閉じてしまわないように） */
-function escapePyDoc(t) { return String(t).split('"""').join('\u201d\u201d\u201d'); }
-
 var PY_RUNNER = [
-  "# ── 3. 実行 ──────────────────────────────────────────────",
+  "# ── 3. 元ファイルを探す ───────────────────────────────────",
+  "# 名前が「ファイルA_0804更新.xlsx」でも「0804更新_ファイルA.xlsx」でも同じものと見なす",
+  "_EXCEL_EXT = (\".xlsx\", \".xlsm\", \".xltx\", \".xltm\", \".xls\")",
+  "_NOISE = re.compile(r\"(年|月|日|更新|最新|最終|改訂|確定|速報|版|コピー|写し\"",
+  "                    r\"|ver|rev|final|copy|new|old)\")",
+  "_WORD = re.compile(r\"[^0-9a-zぁ-ゖァ-ヺー一-鿿]+\")",
+  "MATCH_MIN = 0.6          # これ未満しか似ていなければ「見つからない」とする",
+  "",
+  "",
+  "def _words(name: str, drop_noise: bool = True) -> tuple:",
+  "    \"\"\"ファイル名を、くらべやすい言葉の集まりにする。\"\"\"",
+  "    text = unicodedata.normalize(\"NFKC\", os.path.basename(str(name)))",
+  "    text = os.path.splitext(text)[0].lower()",
+  "    if drop_noise:",
+  "        text = re.sub(r\"\\d+\", \" \", text)     # 日付や連番は見ない",
+  "        text = _NOISE.sub(\" \", text)         # 「更新」「最新」などの飾りも見ない",
+  "    text = _WORD.sub(\" \", text)              # 区切り記号は落とす",
+  "    return tuple(sorted(w for w in text.split() if w))",
+  "",
+  "",
+  "def _key(name: str) -> tuple:",
+  "    \"\"\"名前くらべ用の形。飾りを全部落とすと空になる名前は、そのままの形で見る。\"\"\"",
+  "    return _words(name) or _words(name, drop_noise=False)",
+  "",
+  "",
+  "def _score(want: str, have: str) -> float:",
+  "    \"\"\"名前の近さを 0〜1 で返す。1.0 は「飾りを除けば同じ」。",
+  "",
+  "    言葉が並べ替わっただけ・片方に言葉が足されただけなら高く、",
+  "    「ファイルA」と「ファイルB」のように別の言葉なら低く出る。",
+  "    \"\"\"",
+  "    a, b = _key(want), _key(have)",
+  "    if not a or not b:",
+  "        return 0.0",
+  "    if a == b:                                              # 並び順ちがいもここ",
+  "        return 1.0",
+  "    sa, sb = set(a), set(b)",
+  "    if sa <= sb or sb <= sa:                                # 片方が丸ごと入っている",
+  "        return round(0.8 + 0.15 * len(sa & sb) / len(sa | sb), 4)",
+  "    ja, jb = \"\".join(a), \"\".join(b)",
+  "    if ja in jb or jb in ja:                                # 続けて書けば入っている",
+  "        return round(0.2 + 0.7 * min(len(ja), len(jb)) / max(len(ja), len(jb)), 4)",
+  "    return round(0.6 * difflib.SequenceMatcher(None, ja, jb).ratio(), 4)",
+  "",
+  "",
+  "def find_source(name: str, search_dirs=None) -> str:",
+  "    \"\"\"SOURCES に書いた名前から、実際のファイルを探し当てる。",
+  "",
+  "    同じ名前があればそれを使い、無ければ「いちばん近い名前」を選ぶ。",
+  "    同じくらい近いものが複数あるときは、更新の新しいほうを使う。",
+  "    \"\"\"",
+  "    folders = list(SEARCH_DIRS if search_dirs is None else search_dirs)",
+  "    for folder in folders:",
+  "        exact = os.path.join(folder, name)",
+  "        if os.path.isfile(exact):",
+  "            return exact",
+  "",
+  "    found = []",
+  "    for folder in folders:",
+  "        try:",
+  "            entries = sorted(os.listdir(folder))",
+  "        except OSError:",
+  "            continue",
+  "        for entry in entries:",
+  "            path = os.path.join(folder, entry)",
+  "            if entry.startswith(\"~$\") or not os.path.isfile(path):",
+  "                continue",
+  "            if os.path.splitext(entry)[1].lower() not in _EXCEL_EXT:",
+  "                continue",
+  "            try:",
+  "                when = os.path.getmtime(path)",
+  "            except OSError:",
+  "                when = 0.0",
+  "            found.append((_score(name, entry), when, path))",
+  "    found.sort(key=lambda hit: (-hit[0], -hit[1], hit[2]))   # 近い順、次に新しい順",
+  "",
+  "    if not found or found[0][0] < MATCH_MIN:",
+  "        near = \", \".join(os.path.basename(hit[2]) for hit in found[:5])",
+  "        raise FileNotFoundError(",
+  "            f\"{name} に当たるファイルが {folders} に見つかりません。\"",
+  "            f\"そこにあるのは: {near or '(Excel ファイルなし)'}\")",
+  "",
+  "    picked = os.path.basename(found[0][2])",
+  "    if VERBOSE:",
+  "        ties = [hit for hit in found if hit[0] >= found[0][0] - 0.02]",
+  "        if len(ties) > 1:",
+  "            print(f\"[{name}: 同じくらい近いものが {len(ties)} 件あったので、\"",
+  "                  f\"新しい {picked} を読みました]\")",
+  "        elif picked != name:",
+  "            print(f\"[{name} のかわりに {picked} を読みました]\")",
+  "    return found[0][2]",
+  "",
+  "",
+  "def resolve_sources(sources=None, search_dirs=None) -> dict:",
+  "    \"\"\"名前の一覧を {名前: 実際の場所} にする。dict を渡せば、それをそのまま使う。\"\"\"",
+  "    if isinstance(sources, dict):",
+  "        return dict(sources)",
+  "    names = SOURCES if sources is None else list(sources)",
+  "    return {name: find_source(name, search_dirs) for name in names}",
+  "",
+  "",
+  "# ── 4. 組み立て ──────────────────────────────────────────",
   "def _open(path: str, keep_formulas: bool):",
   "    \"\"\"数式を残すときは式のまま、残さないときは計算済みの値で読む。\"\"\"",
   "    return openpyxl.load_workbook(path, data_only=not keep_formulas)",
   "",
   "",
-  "def build(sources: dict | None = None, output: str | None = None,",
-  "          keep_formulas: bool | None = None, keep_merges: bool | None = None):",
-  "    \"\"\"PLAN のとおりに抜き出して、1 つのブックにまとめて保存する。\"\"\"",
-  "    sources = SOURCES if sources is None else sources",
-  "    output = OUTPUT if output is None else output",
+  "def _assemble(sources=None, keep_formulas=None, keep_merges=None, search_dirs=None):",
+  "    \"\"\"PLAN のとおりに抜き出して、1 冊のブックを組み立てる（保存はしない）。\"\"\"",
   "    keep_formulas = KEEP_FORMULAS if keep_formulas is None else keep_formulas",
   "    keep_merges = KEEP_MERGES if keep_merges is None else keep_merges",
   "",
-  "    books = {name: _open(path, keep_formulas) for name, path in sources.items()}",
+  "    books = {name: _open(path, keep_formulas)",
+  "             for name, path in resolve_sources(sources, search_dirs).items()}",
   "    out = openpyxl.Workbook()",
   "    out.remove(out.active)",
   "",
   "    for step in PLAN:",
   "        book = books.get(step[\"file\"])",
   "        if book is None:",
-  "            raise KeyError(f'元ファイル {step[\"file\"]!r} の置き場所が SOURCES にありません')",
+  "            raise KeyError(f'元ファイル {step[\"file\"]!r} が SOURCES にありません')",
   "        if step[\"sheet\"] not in book.sheetnames:",
   "            raise KeyError(f'{step[\"file\"]} に シート {step[\"sheet\"]!r} がありません')",
   "        ws = book[step[\"sheet\"]]",
@@ -3979,32 +4078,84 @@ var PY_RUNNER = [
   "",
   "    if not out.sheetnames:",
   "        raise RuntimeError(\"PLAN が空です。画面で範囲を出力シートへ置いてから書き出してください\")",
-  "    out.save(output)",
-  "    return output",
+  "    return out",
   "",
   "",
-  "def to_dataframes(sources: dict | None = None, keep_formulas: bool | None = None):",
+  "# ── 5. 書き出し ──────────────────────────────────────────",
+  "def build_bytes(sources=None, keep_formulas=None, keep_merges=None, search_dirs=None) -> bytes:",
+  "    \"\"\"xlsx の中身を bytes で返す。ファイルを作らないので、書けない場所でも動く。\"\"\"",
+  "    buf = io.BytesIO()",
+  "    _assemble(sources, keep_formulas, keep_merges, search_dirs).save(buf)",
+  "    return buf.getvalue()",
+  "",
+  "",
+  "def _places(output: str) -> list:",
+  "    \"\"\"書き出し先の候補。1 つめに書けないときのために、作業用フォルダも用意する。\"\"\"",
+  "    places, seen = [], set()",
+  "    for path in (output,",
+  "                 os.path.join(os.getcwd(), os.path.basename(output)),",
+  "                 os.path.join(tempfile.gettempdir(), os.path.basename(output))):",
+  "        full = os.path.abspath(path)",
+  "        if full not in seen:",
+  "            seen.add(full)",
+  "            places.append(path)",
+  "    return places",
+  "",
+  "",
+  "def build(sources=None, output=None, keep_formulas=None, keep_merges=None,",
+  "          search_dirs=None) -> str:",
+  "    \"\"\"PLAN のとおりに抜き出して保存し、実際に書けた場所を返す。",
+  "",
+  "    保存できないフォルダ（読み取り専用のマウントなど）だったときは、",
+  "    止まらずに作業用フォルダへ逃がして、その場所を知らせる。",
+  "    \"\"\"",
+  "    output = OUTPUT if output is None else output",
+  "    data = build_bytes(sources, keep_formulas, keep_merges, search_dirs)",
+  "    failed = []",
+  "    for path in _places(output):",
+  "        try:",
+  "            with open(path, \"wb\") as fp:",
+  "                fp.write(data)",
+  "        except OSError as err:",
+  "            failed.append(f\"{path}（{err}）\")",
+  "            continue",
+  "        if VERBOSE and failed:",
+  "            print(f\"[{output} には書けなかったので {path} に置きました]\")",
+  "        return path",
+  "    raise OSError(\"どこにも書き出せませんでした: \" + \" / \".join(failed)",
+  "                  + \"。build_bytes() ならファイルを作らずに中身を受け取れます\")",
+  "",
+  "",
+  "def to_dataframes(sources=None, keep_formulas=None, search_dirs=None):",
   "    \"\"\"続きの加工を pandas でしたいとき。{出力シート名: DataFrame} を返す。",
   "",
   "    1 行目を見出しにはしない（画面の見え方をそのまま渡す）ので、",
   "    必要なら df.columns = df.iloc[0] のように呼び出し側で決める。",
+  "    ファイルを作らないので、書き込めない場所でもそのまま使える。",
   "    \"\"\"",
   "    import pandas as pd                     # 使うときだけ読み込む",
-  "    import tempfile, os",
   "",
-  "    tmp = os.path.join(tempfile.mkdtemp(), \"_extract.xlsx\")",
-  "    build(sources=sources, output=tmp, keep_formulas=keep_formulas)",
-  "    book = openpyxl.load_workbook(tmp, data_only=True)",
+  "    keep = KEEP_FORMULAS if keep_formulas is None else keep_formulas",
+  "    data = build_bytes(sources, keep_formulas, search_dirs=search_dirs)",
+  "    book = openpyxl.load_workbook(io.BytesIO(data), data_only=not keep)",
   "    frames = {}",
   "    for name in book.sheetnames:",
   "        rows = [[c.value for c in row] for row in book[name].iter_rows()]",
   "        frames[name] = pd.DataFrame(rows)",
-  "    os.remove(tmp)",
   "    return frames",
   "",
   "",
+  "# ── 6. 実行 ──────────────────────────────────────────────",
+  "# 貼り付けたセルがそのまま走る場所（Snowflake のノートブックなど）でも",
+  "# 落ちないように、うまくいかないときは理由だけを出す。",
   "if __name__ == \"__main__\":",
-  "    print(\"書き出しました:\", build())",
+  "    try:",
+  "        print(\"書き出しました:\", build())",
+  "    except Exception as err:",
+  "        print(\"まだ書き出せていません:\", err)",
+  "        print(\"読み込む予定のファイル:\", \", \".join(SOURCES))",
+  "        print(\"同じ場所に置いてから build() を呼んでください。\")",
+  "        print(\"保存できない場所なら build_bytes() / to_dataframes() が使えます。\")",
   ""
 ].join("\n");
 
@@ -4252,17 +4403,9 @@ function showPyForm() {
     if (fl) used[fl.name] = 1;
   });
   var names = Object.keys(used);
-  names.forEach(function (name, i) {
+  names.forEach(function (name) {
     var row = el("div", "pyfile");
     row.appendChild(el("span", "fnm", name));
-    row.appendChild(el("span", "arw", "→"));
-    var inp = el("input", "inp");
-    inp.id = "pyPath" + i;
-    inp.dataset.file = name;
-    inp.value = name;
-    inp.placeholder = "置き場所（例 /stage/" + name + "）";
-    inp.setAttribute("aria-label", name + " の置き場所");
-    row.appendChild(inp);
     host.appendChild(row);
   });
   $("pyInLabel").textContent = names.length > 1
@@ -4281,13 +4424,9 @@ function hidePyForm() { $("pyForm").hidden = true; }
 $("scPy").addEventListener("click", showPyForm);
 $("pyCancel").addEventListener("click", hidePyForm);
 $("pyOk").addEventListener("click", function () {
-  var paths = {};
-  $("pyInputs").querySelectorAll("input").forEach(function (n) {
-    paths[n.dataset.file] = n.value.trim() || n.dataset.file;
-  });
   var outName = $("pyOut").value.trim() || "抜粋.xlsx";
   if (!/\.xlsx$/i.test(outName)) outName += ".xlsx";
-  var code = pythonFromBlocks(paths, outName);
+  var code = pythonFromBlocks(outName);
   var base = outName.replace(/\.[^.]+$/, "");
   saveBlob(new Blob([code], { type: "text/x-python;charset=utf-8" }), base + ".py");
   hidePyForm();
