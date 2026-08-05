@@ -1045,7 +1045,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <button class="btn sm" id="scImportBtn">ファイルから読む</button>
         <input type="file" id="scImport" accept=".txt,.md,.json" hidden>
         <span class="sep"></span>
-        <button class="btn sm" id="scPy" title="今の配置を、そのまま動く Python にして書き出します">Python を書き出す</button>
+        <button class="btn sm" id="scPy" title="手順書を実行して、その結果をそのまま動く Python にして書き出します（手順書が空なら今の配置から）">Python を書き出す</button>
       </div>
 
       <div class="repeat-form" id="repeatForm" hidden>
@@ -1068,7 +1068,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
       <div class="pyform" id="pyForm" hidden>
         <div class="pyhead">
           <span class="pyttl">Python を書き出す</span>
-          <span class="hint">今の配置と同じことをする 1 本のコードにします（openpyxl だけ使います）</span>
+          <span class="hint">手順書（空なら今の配置）と同じことをする 1 本のコードにします（openpyxl だけ使います）</span>
         </div>
         <div class="pygrid">
           <div class="pylabel" id="pyInLabel">読み込む Excel</div>
@@ -3653,7 +3653,7 @@ function expandScript(text) {
   return { steps: steps, errors: errors };
 }
 
-function runScript(text, clearFirst) {
+function runScript(text, clearFirst, opts) {
   if (!S.sheets.length) { toast("先にExcelを読み込んでください", "wa"); return null; }
 
   // 「# 元ファイル:」と実際に開いているファイルが違うときは注意を出す（別の人が使う想定）
@@ -3724,7 +3724,7 @@ function runScript(text, clearFirst) {
   } else {
     toast("手順書どおりに " + applied + "件を配置しました");
   }
-  if (ctx.generate && !errs.length) generate();
+  if (ctx.generate && !errs.length && !(opts && opts.noGenerate)) generate();
   return { applied: applied, errors: errs };
 }
 
@@ -5322,7 +5322,16 @@ function showPyForm() {
   return true;
 }
 function hidePyForm() { $("pyForm").hidden = true; }
-$("scPy").addEventListener("click", showPyForm);
+$("scPy").addEventListener("click", function () {
+  // Python は「手順書の文章」から作る。まず文章を実行して、その結果を書き出す
+  //（文章が空のときは、いまの配置から）
+  var txt = $("scText").value.trim();
+  if (txt) {
+    var r = runScript($("scText").value, $("scClear").checked, { noGenerate: true });
+    if (!r || r.errors.length) return;          // 失敗の理由は runScript が知らせている
+  }
+  showPyForm();
+});
 $("pyCancel").addEventListener("click", hidePyForm);
 $("pyOk").addEventListener("click", function () {
   var outName = $("pyOut").value.trim() || "抜粋.xlsx";

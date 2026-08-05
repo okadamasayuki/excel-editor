@@ -806,9 +806,13 @@ await page.evaluate(() => {
 await page.waitForTimeout(250);
 
 await page.evaluate(() => window.__app.openScript(true));
-// 手順書が長くても、書き出した Python が膨らまないこと（下で確かめる目印）
+// 手順書が長くても、書き出した Python が膨らまないこと（下で確かめる目印）。
+// Python は手順書の文章から作られるので、いまの配置と同じ内容の手順書に目印を足す
 const pyMark = "この一行はコメントとして貼り付けられてはいけない目印";
-await page.fill("#scText", `説明: ${pyMark}\n# ${pyMark}\nシート追加 まとめ`);
+await page.evaluate(() => { document.getElementById("scText").value = ""; });
+await page.click("#scFromBlocks");
+const scBase = await page.inputValue("#scText");
+await page.fill("#scText", `説明: ${pyMark}\n# ${pyMark}\n` + scBase);
 await page.click("#scPy");
 await page.waitForTimeout(150);
 check("Python の書き出し欄が出る", await page.isVisible("#pyForm"));
@@ -1162,6 +1166,7 @@ if (!pyReady) {
   const [dlSt] = await Promise.all([page.waitForEvent("download"), page.click("#btnGen")]);
   await dlSt.saveAs(join(st, "by-ui.xlsx"));
   await page.evaluate(() => window.__app.openScript(true));
+  await page.evaluate(() => { document.getElementById("scText").value = ""; });
   await page.click("#scPy");
   await page.waitForTimeout(150);
   await page.fill("#pyOut", "by-python.xlsx");
@@ -1192,6 +1197,19 @@ if (!pyReady) {
   check("型の総当たりでも 1 セルも食い違わない", stDiff === 0,
     `${stCells}セル中 ${stDiff}件ちがう ${stFirst}`);
 }
+
+// Python は手順書の文章が本体。文章を書き換えてから「Python を書き出す」を押せば、
+// 実行し直していなくても、文章どおりの中身で書き出される
+await page.evaluate(() => window.__app.openScript(true));
+await page.fill("#scText", "シート追加 文章優先\n売上明細のA1:B2を文章優先のC5に置く");
+await page.click("#scPy");
+await page.waitForTimeout(200);
+check("書き出す前に手順書が実行される（文章が本体）", await page.evaluate(() => {
+  const code = window.__app.pythonFromBlocks("x.xlsx");
+  return code.includes('"out": "文章優先"') && code.includes('"at": "C5"')
+    && !code.includes('"out": "総当たり"');
+}));
+await page.click("#pyCancel");
 await page.evaluate(() => window.__app.openScript(false));
 await loadSampleAgain();
 await page.evaluate(() => {
