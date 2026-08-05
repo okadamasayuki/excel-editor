@@ -1248,13 +1248,10 @@ await page.emulateMedia({ colorScheme: "dark" });
 await page.waitForTimeout(250);
 const hueDark = await page.$eval("#dstGrid .blockbox", (n) => getComputedStyle(n).borderTopColor);
 check("ブロック枠の色がテーマに追随する", hueLight !== hueDark, `${hueLight} → ${hueDark}`);
-check("置いたあとの枠も選択と同じ色", await page.evaluate(() => {
-  const b = getComputedStyle(document.querySelector("#dstGrid .blockbox")).borderTopColor;
-  const doc = getComputedStyle(document.documentElement).getPropertyValue("--src").trim();
-  const probe = document.createElement("div");
-  probe.style.color = doc; document.body.appendChild(probe);
-  const want = getComputedStyle(probe).color; probe.remove();
-  return b === want;
+check("ブロックごとに色分けされる", await page.evaluate(() => {
+  const cs = [...document.querySelectorAll("#dstGrid .blockbox")]
+    .map((n) => getComputedStyle(n).borderTopColor);
+  return cs.length < 2 || new Set(cs).size > 1;
 }));
 await page.screenshot({ path: join(root, "test/shots/dark.png") });
 await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
@@ -1357,7 +1354,7 @@ await page.mouse.move(2, 2);                        // どのブロックにも�
 await page.waitForTimeout(80);
 const tagsShown = await page.$$eval("#dstGrid .blockbox .tag",
   (ns) => ns.filter((n) => getComputedStyle(n).visibility === "visible").length);
-check("ブロックのラベルは既定で隠れている", tagsShown <= 1, `${tagsShown}件が表示中`);
+check("ブロックのラベルは、選択中でもカーソルを離すと隠れる", tagsShown === 0, `${tagsShown}件が表示中`);
 await page.hover("#dstGrid .blockbox >> nth=0");
 check("ホバーでラベルが出る",
   await page.$eval("#dstGrid .blockbox >> nth=0 >> .tag", (n) => getComputedStyle(n).visibility === "visible"));
