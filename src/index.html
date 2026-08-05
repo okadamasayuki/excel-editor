@@ -937,7 +937,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
   <!-- ============ 逆算モードの帯（このモードの間だけ出る） ============ -->
   <div class="revbar" id="revBar" hidden>
     <b>手順書の逆算</b>
-    <span class="revhint">元データと、出来上がりの Excel を、それぞれの ＋ で開いてください。そろうと対応関係と手順書を推定します。「手順書を作る」に切り替えれば、いつもの編集にそのまま戻れます。</span>
+    <span class="revhint">元データは ＋ で開いてください（複数ファイル OK）。出来上がりの Excel は出力シート側の ＋ で 1 ファイル。そろうと対応関係と手順書を推定します。切り替えても、どちらの画面も中身はそのまま残ります。</span>
     <span id="revInfo"></span>
   </div>
 
@@ -4082,7 +4082,7 @@ function reverseFromWb(outWb, label) {
 /* --- 逆算モード ---
    いつもの編集とはまるごと別の作業場に切り替える。入るときに今の状態を
    丸ごと預かり、出るときにそっくり戻すので、既存の配置には一切触れない。 */
-var REV = { on: false, saved: null, outWb: null, outName: "", shown: false };
+var REV = { on: false, saved: null, work: null, outWb: null, outName: "", info: "", shown: false };
 
 /** いまの作業場（読み込んだファイル・配置・手順書・スクロール位置）を丸ごと預かる */
 function wsCapture() {
@@ -4133,21 +4133,31 @@ function enterRev() {
   if (REV.on) return;
   closeCellEditor(false); closeHeaderMenu(); openScript(false);
   REV.saved = wsCapture();
-  REV.on = true; REV.shown = false;
-  wsApply(wsBlank());
+  REV.on = true;
+  // 前に逆算していた続きがあればそのまま出す。なければまっさらから
+  if (REV.work) {
+    wsApply(REV.work);
+  } else {
+    REV.shown = false;
+    wsApply(wsBlank());
+  }
   document.body.classList.add("revmode");
   $("revBar").hidden = false;
   $("dstAdd").hidden = false;
-  $("revInfo").textContent = "";
+  $("revInfo").textContent = REV.info || "";
+  $("revOutChip").hidden = !REV.outName;
+  $("revOutName").textContent = REV.outName || "";
   reflectMode();
-  toast("手順書の逆算に切り替えました。元データと出来上がりを ＋ で開いてください");
+  toast(REV.work ? "手順書の逆算のつづきです"
+    : "手順書の逆算に切り替えました。元データと出来上がりを ＋ で開いてください");
 }
 function exitRev() {
   if (!REV.on) return;
   closeCellEditor(false); closeHeaderMenu(); openScript(false);
+  REV.work = wsCapture();   // 逆算側もそのまま取っておく（トグルで戻れば続きから）
   REV.on = false;
   var w = REV.saved;
-  REV.saved = null; REV.outWb = null; REV.outName = "";
+  REV.saved = null;
   $("revOutChip").hidden = true; $("revOutName").textContent = "";
   document.body.classList.remove("revmode");
   $("revBar").hidden = true;
@@ -4172,7 +4182,8 @@ function revInferNow(openPanel) {
   var parts = ["「置く」" + res.blocks.length + "件"];
   if (res.writes) parts.push("「書く」" + res.writes + "件");
   if (res.miss) parts.push("結び付かないセル " + res.miss + "個");
-  $("revInfo").textContent = "推定: " + parts.join("、");
+  REV.info = "推定: " + parts.join("、");
+  $("revInfo").textContent = REV.info;
   if (openPanel || !REV.shown) openScript(true);   // 最初の推定では手順書も見せる
   REV.shown = true;
 }

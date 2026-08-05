@@ -2831,8 +2831,22 @@ check("逆算した手順書を実行すると同じブックに戻る",
   `diffs=${revRt.nDiffs} ${revRt.diffs.join(" | ")} sheets ${revRt.sheets1} / ${revRt.sheets2}`);
 
 // 画面から: 逆算モードに入る → まっさらな別作業場 → ＋で両方読むと自動で推定
+// 元データは 2 ファイル。出来上がりには、2 つめのファイル由来のシートも足しておく
+const betsuAoa = [["部品", "個数", "単価"], ["歯車", 4, 1200], ["ばね", 9, 340], ["軸受", 2, 5600]];
+const betsuPath = join(tmp, "別売部品.xlsx");
+writeFileSync(betsuPath, Buffer.from(XLSX.write(
+  { SheetNames: ["別表"], Sheets: { "別表": XLSX.utils.aoa_to_sheet(betsuAoa) } },
+  { bookType: "xlsx", type: "base64" }), "base64"));
+const finWb = XLSX.read(revRt.bytes, { type: "base64", cellNF: true });
+const addWs = {};
+betsuAoa.forEach((row, i) => row.forEach((v, j) => {
+  addWs[XLSX.utils.encode_cell({ r: 1 + i, c: 1 + j })] = typeof v === "number" ? { t: "n", v } : { t: "s", v };
+}));
+addWs["!ref"] = "B2:D5";
+finWb.SheetNames.push("追加");
+finWb.Sheets["追加"] = addWs;
 const revPath = join(tmp, "できあがり.xlsx");
-writeFileSync(revPath, Buffer.from(revRt.bytes, "base64"));
+writeFileSync(revPath, Buffer.from(XLSX.write(finWb, { bookType: "xlsx", type: "base64" }), "base64"));
 const revSrcPath = join(tmp, "逆算の元データ.xlsx");
 writeFileSync(revSrcPath, Buffer.from(await page.evaluate(() => {
   const wb = window.__app.S.files[0].wb;
@@ -2869,10 +2883,11 @@ await page.waitForTimeout(300);
 check("出来上がりの名前が出力シート側に出る",
   await page.evaluate(() => !document.getElementById("revOutChip").hidden
     && document.getElementById("revOutName").textContent === "できあがり.xlsx"));
-await page.setInputFiles("#fileInput", revSrcPath);
-await page.waitForFunction(() => window.__app.S.sheets.length > 0);
+await page.setInputFiles("#fileInput", [revSrcPath, betsuPath]);
+await page.waitForFunction(() => window.__app.S.files.length === 2);
 await page.waitForFunction(() => /置く/.test(document.getElementById("scText").value), null, { timeout: 5000 });
 const revUi = await page.evaluate(() => ({
+  files: window.__app.S.files.length,
   info: document.getElementById("revInfo").textContent,
   sc: document.getElementById("scText").value,
   scOpen: !document.getElementById("scriptModal").hidden,
@@ -2880,14 +2895,17 @@ const revUi = await page.evaluate(() => ({
   bb: document.querySelectorAll("#dstGrid .blockbox").length,
   outs: window.__app.S.out.map((o) => o.name + ":" + o.blocks.length + ":" + Object.keys(o.cells || {}).length).join(" "),
 }));
+check("元データは複数ファイル開ける", revUi.files === 2, "files=" + revUi.files);
 check("両方そろうと自動で推定され、手順書が開く",
   revUi.scOpen && /売上明細のA1:E8をまとめのB2に置く/.test(revUi.sc), revUi.sc.slice(0, 200));
-check("帯に推定の内訳が出る", /「置く」3件/.test(revUi.info) && /「書く」4件/.test(revUi.info), revUi.info);
+check("別ファイルの元データにまたがっても推定できる",
+  /別表のA1:C4を追加のB2に置く/.test(revUi.sc), revUi.sc.slice(-200));
+check("帯に推定の内訳が出る", /「置く」4件/.test(revUi.info) && /「書く」4件/.test(revUi.info), revUi.info);
 check("実ファイル経由でも日付は日付の文字になる", /「2026\/8\/1」と書く/.test(revUi.sc));
 check("対応関係が画面に出る（元データ側の枠と出力側のブロック）",
-  revUi.used >= 2 && revUi.bb >= 1, `used=${revUi.used} bb=${revUi.bb}`);
+  revUi.used >= 1 && revUi.bb >= 1, `used=${revUi.used} bb=${revUi.bb}`);
 check("出来上がりどおりに配置が再現される",
-  revUi.outs === "まとめ:2:4 予備:1:0", revUi.outs);
+  revUi.outs === "まとめ:2:4 予備:1:0 追加:1:0", revUi.outs);
 
 // 戻ると、いつもの編集がそっくりそのまま
 await page.evaluate(() => window.__app.openScript(false));
@@ -2919,9 +2937,21 @@ const strangeWb = { SheetNames: ["謎"], Sheets: { "謎": strangeWs } };
 const strangePath = join(tmp, "謎の出来上がり.xlsx");
 writeFileSync(strangePath, Buffer.from(XLSX.write(strangeWb, { bookType: "xlsx", type: "base64" }), "base64"));
 await page.click("#modeRev");
-await page.waitForTimeout(200);
-await page.setInputFiles("#fileInput", revSrcPath);
-await page.waitForFunction(() => window.__app.S.sheets.length > 0);
+await page.waitForTimeout(250);
+const revAgain = await page.evaluate(() => ({
+  files: window.__app.S.files.length,
+  sc: document.getElementById("scText").value,
+  chip: !document.getElementById("revOutChip").hidden && document.getElementById("revOutName").textContent,
+  info: document.getElementById("revInfo").textContent,
+  outs: window.__app.S.out.map((o) => o.name + ":" + o.blocks.length + ":" + Object.keys(o.cells || {}).length).join(" "),
+}));
+check("もう一度逆算に切り替えると、前の続きがそのまま出る",
+  revAgain.files === 2 && /別表のA1:C4を追加のB2に置く/.test(revAgain.sc)
+  && revAgain.outs === "まとめ:2:4 予備:1:0 追加:1:0",
+  JSON.stringify({ files: revAgain.files, outs: revAgain.outs }));
+check("出来上がりの名前と推定の内訳も残っている",
+  revAgain.chip === "できあがり.xlsx" && /「置く」4件/.test(revAgain.info),
+  revAgain.chip + " / " + revAgain.info);
 await page.setInputFiles("#revOutFile", strangePath);
 await page.waitForFunction(() => /謎/.test(document.getElementById("scText").value), null, { timeout: 5000 });
 check("結び付かないセルが多いときは注記になる",
@@ -2933,6 +2963,10 @@ check("帯にも結び付かない数が出る",
 await page.evaluate(() => window.__app.openScript(false));
 await page.click("#modeEdit");
 await page.waitForTimeout(200);
+check("逆算を何度行き来しても、編集側は変わらない",
+  await page.evaluate((b) => window.__app.S.fileName === b.file
+    && window.__app.S.out.map((o) => o.name + ":" + o.blocks.length + ":" + Object.keys(o.cells || {}).length).join(" ") === b.outs,
+    revBefore));
 
 // ---- 9b. 読み込んだExcelがブラウザに保存されないことの実測 ---------------
 const storage = await page.evaluate(async () => {
