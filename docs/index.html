@@ -2493,7 +2493,12 @@ function renderOutOverlay(cont) {
       e.dataTransfer.setData("text/plain", rangeLabel(b));
     });
     tag.addEventListener("dragend", function () { dragPayload = null; clearGhost(); });
-    tag.addEventListener("click", function (e) { e.stopPropagation(); selectBlock(b.id); });
+    tag.addEventListener("click", function (e) {
+      e.stopPropagation();
+      selectBlock(b.id);
+      var br = blockRect(b);                  // ラベルのクリックは「まるごと選ぶ」
+      setDstSel(br.r1, br.c1, br.r2, br.c2);
+    });
     n.appendChild(tag);
     ovl.appendChild(n);
   });
@@ -2871,17 +2876,16 @@ function clearGhost() {
     try { wrap.releasePointerCapture(e.pointerId); } catch (err) {}
   });
 
-  // ブロックの上を押したら、そのブロックを選んで集計の対象にする
+  // ブロックの上をクリックしたら、ブロックを選びつつ、範囲はそのセル 1 個だけにする
+  //（まるごと選ばれると入力のつもりのクリックでうっとうしいため。
+  //  範囲まるごとの集計は、ブロックのラベル（⠿）のクリックで）
   wrap.addEventListener("click", function (e) {
     var hit = dstGrid.cellAt(e.clientX, e.clientY, false);
     if (!hit) return;
     var h = outCache.map[hit.r + "," + hit.c], o = activeOut();
     if (!h || h.ed || !o || !o.blocks[h.bi]) return;
-    var bb = o.blocks[h.bi];
-    selectBlock(bb.id);
-    var bs = rangeSize(bb);
-    var bh = bb.trans ? bs.w : bs.h, bw = bb.trans ? bs.h : bs.w;
-    setDstSel(bb.dr, bb.dc, bb.dr + bh - 1, bb.dc + bw - 1);
+    selectBlock(o.blocks[h.bi].id);
+    setDstSel(hit.r, hit.c, hit.r, hit.c);
   });
 
   // 行・列の見出しを右クリック → 挿入メニュー（選んでいない見出しなら、選んでから出す）

@@ -2441,7 +2441,14 @@ await page.evaluate(() => {
 await page.waitForTimeout(150);
 await page.click("#dstGrid .blockbox");
 await page.waitForTimeout(120);
-check("ブロックを選ぶとその範囲の集計になる",
+check("ブロックの上のクリックは、そのセルだけを選ぶ（全選択しない）", await page.evaluate(() => {
+  const g = window.__app.S.dsel;
+  return g && g.r1 === g.r2 && g.c1 === g.c2;
+}), await page.evaluate(() => JSON.stringify(window.__app.S.dsel)));
+await page.hover("#dstGrid .blockbox");
+await page.click("#dstGrid .blockbox .tag");
+await page.waitForTimeout(120);
+check("ラベル（⠿）のクリックで、その範囲の集計になる",
   /^A1:C6/.test(await page.textContent("#dstStats")), await page.textContent("#dstStats"));
 
 await page.evaluate(() => { window.__app.clearDstSel(); window.__app.S.out = []; window.__app.S.selBlock = null; });
