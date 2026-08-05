@@ -445,16 +445,19 @@ const insPos = async () => await page.evaluate(() =>
   window.__app.S.out[window.__app.S.activeOut].blocks.map((b) => b.dr + "," + b.dc).join(" "));
 check("差し込みの前の配置", (await insPos()) === "0,0 0,6 5,0", await insPos());
 
-await page.click('#dstGrid .growh .gh[data-r="4"]');            // 5行目の見出し（1回目 = 選択だけ）
+await page.click('#dstGrid .growh .gh[data-r="4"]');            // 5行目の見出し（左クリック = 選択だけ）
 await page.waitForTimeout(120);
-check("1回目のクリックは選択だけでメニューを出さない",
+check("左クリックは選択だけでメニューを出さない",
   !(await page.isVisible(".hmenu")) && await page.evaluate(() => {
     const g = window.__app.S.dsel;
     return g && g.r1 === 4 && g.r2 === 4 && g.c1 === 0;
   }), await page.evaluate(() => JSON.stringify(window.__app.S.dsel)));
-await page.click('#dstGrid .growh .gh[data-r="4"]');            // もう一度クリックでメニュー
+await page.click('#dstGrid .growh .gh[data-r="4"]');            // もう一度左クリックしても出ない
 await page.waitForTimeout(120);
-check("出力の行見出しでメニューが出る", await page.isVisible(".hmenu"),
+check("何度クリックしてもメニューは出ない", !(await page.isVisible(".hmenu")));
+await page.click('#dstGrid .growh .gh[data-r="4"]', { button: "right" });   // 右クリックで出る
+await page.waitForTimeout(120);
+check("出力の行見出しの右クリックでメニューが出る", await page.isVisible(".hmenu"),
   String(await page.locator(".hmenu").count()));
 check("上下に挿入できるメニューになっている",
   (await page.$$eval(".hmenu button", (ns) => ns.map((n) => n.textContent))).join(" / ")
@@ -475,9 +478,7 @@ await page.keyboard.press("Control+z");
 await page.waitForTimeout(150);
 check("行の差し込みも Ctrl+Z で戻せる", (await insPos()) === "0,0 0,6 5,0", await insPos());
 
-await page.click('#dstGrid .gcolh .gh[data-c="3"]');            // D列の見出し（選択）
-await page.waitForTimeout(120);
-await page.click('#dstGrid .gcolh .gh[data-c="3"]');            // もう一度でメニュー
+await page.click('#dstGrid .gcolh .gh[data-c="3"]', { button: "right" });   // 列は右クリック一発
 await page.waitForTimeout(120);
 check("列は左右に挿入できる",
   (await page.$$eval(".hmenu button", (ns) => ns.map((n) => n.textContent))).join(" / ")
@@ -497,7 +498,7 @@ check("Shift+クリックで行の帯を選べる", await page.evaluate(() => {
   const g = window.__app.S.dsel;
   return g && g.r1 === 1 && g.r2 === 3 && g.c1 === 0;
 }), await page.evaluate(() => JSON.stringify(window.__app.S.dsel)));
-await page.click('#dstGrid .growh .gh[data-r="2"]');            // 帯の中の見出し
+await page.click('#dstGrid .growh .gh[data-r="2"]', { button: "right" });   // 帯の中を右クリック
 await page.waitForTimeout(120);
 check("帯のぶんまとめて挿入できるメニューになる",
   /上に 3行 挿入/.test(await page.textContent(".hmenu")), await page.textContent(".hmenu"));
@@ -506,9 +507,7 @@ await page.waitForTimeout(200);
 check("3行ぶんまとめて下がる", (await insPos()) === "0,0 0,7 8,0", await insPos());
 
 // 何も動かない位置では、何も変えずに知らせるだけ
-await page.click('#dstGrid .growh .gh[data-r="14"]');
-await page.waitForTimeout(120);
-await page.click('#dstGrid .growh .gh[data-r="14"]');
+await page.click('#dstGrid .growh .gh[data-r="14"]', { button: "right" });
 await page.waitForTimeout(120);
 await page.click(".hmenu button >> nth=1");                     // 下に挿入（何もない）
 await page.waitForTimeout(150);

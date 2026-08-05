@@ -1014,7 +1014,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         </span>
       </div>
       <div class="gridwrap dst" id="dstGrid" tabindex="0"
-           title="ダブルクリック（または F2）で値・数式・日付を直接入力。選択の右下の■を引っぱると続きが入ります（端まで引くと自動で送られます）。行・列の見出しは 1回目のクリックで選択、もう一度クリックで挿入メニュー。Delete で、選んだ範囲のブロックや入力をまとめて消せます"></div>
+           title="ダブルクリック（または F2）で値・数式・日付を直接入力。選択の右下の■を引っぱると続きが入ります（端まで引くと自動で送られます）。行・列の見出しはクリックで選択、右クリックで挿入メニュー。Delete で、選んだ範囲のブロックや入力をまとめて消せます"></div>
       <div class="dstfoot" id="dstFoot">
         <span class="cellstats" id="dstStats" hidden></span>
       </div>
@@ -2811,25 +2811,21 @@ function clearGhost() {
     wrap.focus();                                               // Delete などのキー操作を受け取れるように
     var cont = outCache;
     var lastR = Math.max(cont.maxR, 0), lastC = Math.max(cont.maxC, 0);
-    // 見出し: 1回目のクリックで行・列を選び、選んだところをもう一度クリックしたらメニュー
+    // 見出し: クリックは選ぶだけ（Shift で帯を広げる）。挿入メニューは右クリックで
     if (hit.rawR < 0 && hit.rawC >= 0) {                                                // 列まるごと
-      if (e.shiftKey && S.dsel) {                                                       // Shift で列の帯を広げる
+      if (e.shiftKey && S.dsel) {
         setDstSel(0, Math.min(S.dsel.c1, hit.c), lastR, Math.max(S.dsel.c2, hit.c));
         return;
       }
-      var cb = dselBand("c", hit.c, lastR, lastC);
-      if (cb.kept) openDstHeaderMenu("c", cb.start, cb.n, e.clientX, e.clientY);
-      else setDstSel(0, hit.c, lastR, hit.c);
+      setDstSel(0, hit.c, lastR, hit.c);
       return;
     }
     if (hit.rawC < 0 && hit.rawR >= 0) {                                                // 行まるごと
-      if (e.shiftKey && S.dsel) {                                                       // Shift で行の帯を広げる
+      if (e.shiftKey && S.dsel) {
         setDstSel(Math.min(S.dsel.r1, hit.r), 0, Math.max(S.dsel.r2, hit.r), lastC);
         return;
       }
-      var rb = dselBand("r", hit.r, lastR, lastC);
-      if (rb.kept) openDstHeaderMenu("r", rb.start, rb.n, e.clientX, e.clientY);
-      else setDstSel(hit.r, 0, hit.r, lastC);
+      setDstSel(hit.r, 0, hit.r, lastC);
       return;
     }
     if (hit.rawR < 0 && hit.rawC < 0) { setDstSel(0, 0, lastR, lastC); return; }        // 全体
@@ -2862,6 +2858,25 @@ function clearGhost() {
     var bs = rangeSize(bb);
     var bh = bb.trans ? bs.w : bs.h, bw = bb.trans ? bs.h : bs.w;
     setDstSel(bb.dr, bb.dc, bb.dr + bh - 1, bb.dc + bw - 1);
+  });
+
+  // 行・列の見出しを右クリック → 挿入メニュー（選んでいない見出しなら、選んでから出す）
+  wrap.addEventListener("contextmenu", function (e) {
+    var hit = dstGrid.cellAt(e.clientX, e.clientY, true);
+    if (!hit || (hit.rawR >= 0 && hit.rawC >= 0)) return;       // セルの上はブラウザに任せる
+    if (hit.rawR < 0 && hit.rawC < 0) return;                   // 左上の角も対象外
+    e.preventDefault();
+    var cont2 = outCache;
+    var lastR2 = Math.max(cont2.maxR, 0), lastC2 = Math.max(cont2.maxC, 0);
+    if (hit.rawR < 0) {                                         // 列の見出し
+      var cb = dselBand("c", hit.c, lastR2, lastC2);
+      if (!cb.kept) setDstSel(0, hit.c, lastR2, hit.c);
+      openDstHeaderMenu("c", cb.start, cb.n, e.clientX, e.clientY);
+    } else {                                                    // 行の見出し
+      var rb = dselBand("r", hit.r, lastR2, lastC2);
+      if (!rb.kept) setDstSel(hit.r, 0, hit.r, lastC2);
+      openDstHeaderMenu("r", rb.start, rb.n, e.clientX, e.clientY);
+    }
   });
 
   // ダブルクリック（または F2 / そのまま文字を打つ）で、そのセルに直接入力
