@@ -733,6 +733,18 @@ body.srcmax .splitter, body.dstmax .splitter { display: none; }
 .modal-head { display: flex; align-items: center; gap: 10px; }
 .modal-head .eyebrow { font-size: 12px; color: var(--dst); letter-spacing: .08em; }
 
+/* --- 逆算モードの帯 --- */
+/* 帯が出るあいだは、シェルの行を 1 本増やす（帯ぶんだけ下がる） */
+.revmode .app { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.revbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 6px 14px; font-size: 12px;
+  background: var(--src-soft); border-bottom: 1px solid var(--line);
+}
+.revbar b { color: var(--src); letter-spacing: .04em; flex: none; }
+.revbar .revhint { color: var(--muted); }
+.revbar #revInfo { color: var(--ink); font-weight: 600; }
+
 .rtoolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .rtoolbar .sep { width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
 textarea.script {
@@ -895,13 +907,22 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
       <span class="sub">選んで、置いて、書き出す</span>
     </div>
     <div class="spacer"></div>
-    <button class="btn ghost" id="btnRev" title="いま開いている元データと、出来上がりの Excel を突き合わせて、手順書を推定します">手順書を逆算</button>
+    <button class="btn ghost" id="btnRev" title="元データと出来上がりの Excel を突き合わせて手順書を推定する、別の画面に切り替えます（いまの編集はそのまま残ります）">手順書を逆算</button>
     <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xlsb,.xls,.csv" multiple hidden>
     <button class="btn ghost" id="btnLayout" title="元データと出力シートの並べ方を切り替えます">⇅ 上下に並べる</button>
     <button class="btn" id="btnScript" title="同じ作業を使い回す手順書を開きます">手順書</button>
     <button class="btn" id="btnOpen">ファイルを開く</button>
     <button class="btn primary" id="btnGen" disabled>Excelを生成してダウンロード</button>
   </header>
+
+  <!-- ============ 逆算モードの帯（このモードの間だけ出る） ============ -->
+  <div class="revbar" id="revBar" hidden>
+    <b>手順書の逆算</b>
+    <span class="revhint">元データと、出来上がりの Excel を、それぞれの ＋ で開いてください。そろうと対応関係と手順書を推定します。いつもの編集はそのまま残っています。</span>
+    <span id="revInfo"></span>
+    <div class="spacer"></div>
+    <button class="btn sm" id="revExit">← 編集にもどる</button>
+  </div>
 
   <!-- ============ 3ペイン ============ -->
   <div class="panes">
@@ -938,6 +959,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <span class="eyebrow" style="color:var(--src)">元データ</span>
         <div id="fileChip" class="filechip" hidden><span class="dot"></span><b id="fileName"></b><span id="fileMeta" class="mono"></span></div>
         <div class="filetabs" id="srcFiles" hidden></div>
+        <button class="btn sm iconx" id="srcAdd" title="元データのファイルを開きます（何個でも足せます）">＋</button>
         <div class="spacer"></div>
         <button class="btn sm" id="btnMaxSrc" title="元データを画面いっぱいに表示します（Escで戻る）">⤢ 全画面</button>
       </div>
@@ -988,6 +1010,9 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
     <section class="pane pane-dst" aria-label="出力シート">
       <div class="pane-head">
         <span class="eyebrow" style="color:var(--dst)">出力シート</span>
+        <div class="filechip" id="revOutChip" hidden><span class="dot"></span><b id="revOutName"></b></div>
+        <button class="btn sm iconx" id="dstAdd" hidden title="出来上がりの Excel を開きます。元データと突き合わせて手順書を逆算します">＋</button>
+        <input type="file" id="revOutFile" accept=".xlsx,.xlsm,.xlsb,.xls,.csv" hidden>
         <div class="spacer"></div>
         <button class="btn sm" id="btnMaxDst" title="出力シートを画面いっぱいに表示します（Escで戻る）">⤢ 全画面</button>
       </div>
@@ -1123,33 +1148,6 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
 
     </div>
   </div>
-
-  <!-- ============ 手順書の逆算（元データ＋出来上がり → 手順書を推定） ============ -->
-  <div class="modal" id="revModal" hidden role="dialog" aria-modal="true" aria-labelledby="revTitle">
-    <div class="modal-panel">
-      <div class="modal-head">
-        <span class="eyebrow" id="revTitle">手順書を逆算</span>
-        <div class="spacer"></div>
-        <button class="btn sm iconx" id="revClose" aria-label="閉じる" title="閉じる">×</button>
-      </div>
-      <p class="hint" style="margin:0">
-        いま開いている<b>元データ</b>と、<b>出来上がりの Excel</b> を突き合わせて、
-        「どこを・どこへ置いたか」を手順書として推定します。元データは先に「ファイルを開く」で開いておいてください。
-        値の一致から推定するので、転置や、元データに無い値（手で編集した結果など）は「…と書く」や # の注記になります。
-      </p>
-      <div class="rtoolbar">
-        <button class="btn sm primary" id="revPick">出来上がりの Excel を選ぶ</button>
-        <input type="file" id="revFile" accept=".xlsx,.xlsm,.xlsb,.xls,.csv" hidden>
-        <span class="hint" id="revStatus"></span>
-      </div>
-      <textarea class="script" id="revText" readonly placeholder="ここに、推定した手順書が出ます"></textarea>
-      <div class="rtoolbar">
-        <button class="btn sm primary" id="revToScript" disabled>手順書へ送る</button>
-        <span class="hint">送ったら「手順書を実行」でそのまま再現できます</span>
-      </div>
-    </div>
-  </div>
-
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
@@ -1643,14 +1641,15 @@ function readWorkbook(data, name) {
   renderSrcFiles(); renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList();
   toast(name + " を読み込みました（" + added.length + "シート）"
     + (S.files.length > 1 ? " ／ 合わせて " + S.files.length + "ファイル" : ""));
+  if (REV.on) revInferSoon();   // 逆算モード中に元データが増えたら推定し直す
   return true;
 }
 
-/** 上のファイル表示。複数あるときは「ほかN件」とまとめる */
+/** 上のファイル表示。複数あるときは「ほかN件」とまとめる（シート数までは出さない） */
 function renderFileChip() {
   var n = S.files.length;
   $("fileName").textContent = n ? S.files[0].name + (n > 1 ? " ほか" + (n - 1) + "件" : "") : "";
-  $("fileMeta").textContent = (n > 1 ? n + "ファイル / " : "") + S.sheets.length + "シート";
+  $("fileMeta").textContent = n > 1 ? n + "ファイル" : "";
   $("fileChip").title = S.files.map(function (f) { return f.name; }).join("\n");
 }
 
@@ -1692,6 +1691,7 @@ function removeFile(fi) {
   S.activeFile = S.sheets.length ? S.sheets[S.active].file : 0;
   renderSrcFiles(); renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList();
   toast(name + " を閉じました" + (dropped ? "（ブロック " + dropped + " 件も外しました）" : ""));
+  if (REV.on) revInferSoon();
 }
 
 /* --- 読み込み中の表示 --- */
@@ -4062,57 +4062,127 @@ function reverseFromWb(outWb, label) {
   return { text: L.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n", blocks: blocks, writes: writes, miss: miss };
 }
 
-/* --- 逆算パネルの開閉と配線 --- */
-function openRev(open) {
-  $("revModal").hidden = !open;
+/* --- 逆算モード ---
+   いつもの編集とはまるごと別の作業場に切り替える。入るときに今の状態を
+   丸ごと預かり、出るときにそっくり戻すので、既存の配置には一切触れない。 */
+var REV = { on: false, saved: null, outWb: null, outName: "", shown: false };
+
+/** いまの作業場（読み込んだファイル・配置・手順書・スクロール位置）を丸ごと預かる */
+function wsCapture() {
+  return {
+    files: S.files, activeFile: S.activeFile, fileName: S.fileName,
+    sheets: S.sheets, active: S.active, sel: S.sel, dsel: S.dsel, extras: S.extras,
+    out: S.out, activeOut: S.activeOut, selBlock: S.selBlock,
+    seq: S.seq, outSeq: S.outSeq, undo: S.undo,
+    scText: $("scText").value,
+    srcTop: $("srcGrid").scrollTop, srcLeft: $("srcGrid").scrollLeft,
+    dstTop: $("dstGrid").scrollTop, dstLeft: $("dstGrid").scrollLeft
+  };
 }
-$("btnRev").addEventListener("click", function () {
-  if (!S.sheets.length) { toast("先に「ファイルを開く」で元データを読み込んでください", "wa"); return; }
-  openRev(true);
-});
-$("revClose").addEventListener("click", function () { openRev(false); });
-$("revModal").addEventListener("pointerdown", function (e) {
-  if (e.target === $("revModal")) openRev(false);   // 外側を押したら閉じる
-});
-$("revPick").addEventListener("click", function () { $("revFile").value = ""; $("revFile").click(); });
-$("revFile").addEventListener("change", function () {
+function wsBlank() {
+  return { files: [], activeFile: 0, fileName: "", sheets: [], active: 0,
+    sel: null, dsel: null, extras: [], out: [], activeOut: 0, selBlock: null,
+    seq: 1, outSeq: 1, undo: [], scText: "",
+    srcTop: 0, srcLeft: 0, dstTop: 0, dstLeft: 0 };
+}
+/** 預かっていた作業場に入れ替えて、画面を描き直す */
+function wsApply(w) {
+  S.files = w.files; S.activeFile = w.activeFile; S.fileName = w.fileName;
+  S.sheets = w.sheets; S.active = w.active; S.sel = w.sel; S.dsel = w.dsel; S.extras = w.extras;
+  S.out = w.out; S.activeOut = w.activeOut; S.selBlock = w.selBlock;
+  S.seq = w.seq; S.outSeq = w.outSeq; S.undo = w.undo;
+  $("scText").value = w.scText;
+  var has = !!S.sheets.length;
+  $("dropzone").hidden = has;
+  $("srcGrid").hidden = !has;
+  $("fileChip").hidden = !has;
+  $("btnGen").disabled = !has;
+  if (has) renderFileChip();
+  renderSrcFiles(); renderSheetList(); renderSrcTabs(); renderSrc(); renderOut(); renderBlockList();
+  renderDstStats(); reflectCellFmt();
+  $("srcGrid").scrollTop = w.srcTop; $("srcGrid").scrollLeft = w.srcLeft;
+  $("dstGrid").scrollTop = w.dstTop; $("dstGrid").scrollLeft = w.dstLeft;
+}
+function enterRev() {
+  if (REV.on) return;
+  closeCellEditor(false); closeHeaderMenu(); openScript(false);
+  REV.saved = wsCapture();
+  REV.on = true; REV.shown = false;
+  wsApply(wsBlank());
+  document.body.classList.add("revmode");
+  $("revBar").hidden = false;
+  $("dstAdd").hidden = false;
+  $("revInfo").textContent = "";
+  $("btnRev").textContent = "編集にもどる";
+  toast("手順書の逆算に切り替えました。元データと出来上がりを ＋ で開いてください");
+}
+function exitRev() {
+  if (!REV.on) return;
+  closeCellEditor(false); closeHeaderMenu(); openScript(false);
+  REV.on = false;
+  var w = REV.saved;
+  REV.saved = null; REV.outWb = null; REV.outName = "";
+  $("revOutChip").hidden = true; $("revOutName").textContent = "";
+  document.body.classList.remove("revmode");
+  $("revBar").hidden = true;
+  $("dstAdd").hidden = true;
+  $("btnRev").textContent = "手順書を逆算";
+  wsApply(w);
+  toast("いつもの編集にもどりました");
+}
+$("btnRev").addEventListener("click", function () { REV.on ? exitRev() : enterRev(); });
+$("revExit").addEventListener("click", exitRev);
+
+/**
+ * 元データと出来上がりがそろったら、突き合わせて手順書を推定し、
+ * その手順書を実行して対応関係（どこを・どこへ）を画面に出す。
+ */
+function revInferNow(openPanel) {
+  if (!REV.on || !REV.outWb) return;
+  if (!S.sheets.length) { toast("先に元データ側の ＋ でファイルを開いてください", "wa"); return; }
+  var res = reverseFromWb(REV.outWb, REV.outName);
+  $("scText").value = res.text;
+  runScript(res.text, true, { noGenerate: true });
+  var parts = ["「置く」" + res.blocks.length + "件"];
+  if (res.writes) parts.push("「書く」" + res.writes + "件");
+  if (res.miss) parts.push("結び付かないセル " + res.miss + "個");
+  $("revInfo").textContent = "推定: " + parts.join("、");
+  if (openPanel || !REV.shown) openScript(true);   // 最初の推定では手順書も見せる
+  REV.shown = true;
+}
+/** 元データを入れ替えたときの推定し直し（連続で読み込んでも 1 回にまとめる） */
+var revTimer = null;
+function revInferSoon() {
+  if (!REV.on || !REV.outWb) return;
+  clearTimeout(revTimer);
+  revTimer = setTimeout(function () { revInferNow(false); }, 80);
+}
+
+/* ＋ ボタン: 元データ側はいつものファイル選択、出力側は出来上がりの読み込み */
+$("srcAdd").addEventListener("click", function () { $("fileInput").click(); });
+$("dstAdd").addEventListener("click", function () { $("revOutFile").value = ""; $("revOutFile").click(); });
+$("revOutFile").addEventListener("change", function () {
   var f = this.files && this.files[0];
   if (!f) return;
-  if (!S.sheets.length) { toast("先に「ファイルを開く」で元データを読み込んでください", "wa"); return; }
   var rd = new FileReader();
   rd.onload = function () {
-    var res;
     try {
       var data = new Uint8Array(rd.result);
-      var wb = /\.(csv|txt)$/i.test(f.name)
+      REV.outWb = /\.(csv|txt)$/i.test(f.name)
         ? XLSX.read(decodeCsv(data), { type: "string", cellDates: true, cellNF: true })
         : XLSX.read(data, { type: "array", cellDates: true, cellNF: true });
-      res = reverseFromWb(wb, f.name);
+      REV.outName = f.name;
     } catch (err) {
-      $("revStatus").textContent = "読み込めませんでした: " + f.name;
       toast("「" + f.name + "」をExcelとして読み込めませんでした", "er");
       return;
     }
-    $("revText").value = res.text;
-    $("revStatus").textContent = "「置く」" + res.blocks.length + "件"
-      + (res.writes ? "、「書く」" + res.writes + "件" : "")
-      + (res.miss ? "、結び付かないセル " + res.miss + "個" : "") + " を推定しました";
-    $("revToScript").disabled = !res.blocks.length && !res.writes;
+    $("revOutName").textContent = f.name;
+    $("revOutChip").hidden = false;
+    if (S.sheets.length) revInferNow(true);
+    else toast(f.name + " を預かりました。元データ側の ＋ でファイルを開くと推定します");
   };
-  rd.onerror = function () {
-    $("revStatus").textContent = "読み込めませんでした: " + f.name;
-  };
+  rd.onerror = function () { toast("「" + f.name + "」を読み込めませんでした", "er"); };
   rd.readAsArrayBuffer(f);
-});
-$("revToScript").addEventListener("click", function () {
-  var txt = $("revText").value.trim();
-  if (!txt) return;
-  var cur = $("scText").value.trim();
-  if (cur && !confirm("いま手順書に書かれている内容を、逆算した手順書で置き換えますか？")) return;
-  $("scText").value = txt + "\n";
-  openRev(false);
-  openScript(true);
-  toast("逆算した手順書を送りました。「実行」を押すと同じ配置を再現します");
 });
 
 /* --- 「繰り返しにする」 --- */
@@ -5779,7 +5849,8 @@ window.__app = {
   parseCell: parseCell, setMaxSrc: setMaxSrc, setMaxPane: setMaxPane, openHeaderMenu: openHeaderMenu,
   setDstSel: setDstSel, clearDstSel: clearDstSel, insertDstLines: insertDstLines, toast: toast,
   revealSelection: revealSelection,
-  reverseFromWb: reverseFromWb, revNorm: revNorm, openRev: openRev,
+  reverseFromWb: reverseFromWb, revNorm: revNorm,
+  REV: REV, enterRev: enterRev, exitRev: exitRev, revInferNow: revInferNow,
   srcGrid: srcGrid, dstGrid: dstGrid
 };
 })();
