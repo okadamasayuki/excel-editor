@@ -737,6 +737,20 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
 /* 閉じるの × */
 .btn.iconx { padding: 2px 9px; font-size: 15px; line-height: 1.2; }
 
+/* Python の書き出し */
+.pyform {
+  display: grid; gap: 8px; background: var(--dst-soft); border: 1px solid var(--dst-line);
+  border-radius: var(--r-md); padding: 9px 11px;
+}
+.pyrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pyrow label { font-size: 11.5px; color: var(--ink-2); flex: none; }
+.pyrow .inp { flex: 1 1 220px; min-width: 0; }
+.pyttl { font-size: 12px; font-weight: 700; color: var(--dst); }
+.pyrow .fnm {
+  font-family: var(--font-mono); font-size: 11px; color: var(--dst); flex: none;
+  max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* 手順書に書けることの一覧 */
 .cheat {
   border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
@@ -976,6 +990,8 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <button class="btn sm" id="scExport">ファイルに書き出す</button>
         <button class="btn sm" id="scImportBtn">ファイルから読む</button>
         <input type="file" id="scImport" accept=".txt,.md,.json" hidden>
+        <span class="sep"></span>
+        <button class="btn sm" id="scPy" title="今の配置を、そのまま動く Python にして書き出します">Python を書き出す</button>
       </div>
 
       <div class="repeat-form" id="repeatForm" hidden>
@@ -993,6 +1009,21 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <button class="btn sm primary" id="repeatOk">この行で繰り返す</button>
         <button class="btn sm" id="repeatCancel">やめる</button>
         <span class="hint" id="repeatHint">カンマ区切り。10-14 のように範囲でも指定できます</span>
+      </div>
+
+      <div class="pyform" id="pyForm" hidden>
+        <div class="pyrow">
+          <span class="pyttl">Python を書き出す</span>
+          <span class="hint">今の配置と同じことをする 1 本のコードにします（openpyxl だけ使います）</span>
+        </div>
+        <div class="pyrow" id="pyInputs"></div>
+        <div class="pyrow">
+          <label for="pyOut">出力ファイル</label>
+          <input class="inp" id="pyOut" placeholder="抜粋.xlsx">
+          <div class="spacer"></div>
+          <button class="btn sm primary" id="pyOk">書き出す</button>
+          <button class="btn sm" id="pyCancel">やめる</button>
+        </div>
       </div>
 
       <div class="cheat" id="scCheat" hidden>
@@ -3744,7 +3775,7 @@ $("inspTrans").addEventListener("change", function () {
 function openScript(open) {
   $("scriptModal").hidden = !open;
   if (open) $("scText").focus();
-  else { hideRepeatForm(); stopMini(); }
+  else { hideRepeatForm(); hidePyForm(); stopMini(); }
 }
 $("btnScript").addEventListener("click", function () { openScript(true); });
 $("scClose").addEventListener("click", function () { openScript(false); });
@@ -3767,6 +3798,186 @@ $("scFromBlocks").addEventListener("click", function () {
   $("scText").value = txt;
   toast("手順書を作りました。説明を書き足して保存できます");
 });
+
+/* ============================================================
+   7c. Python への書き出し — 同じ処理を Snowflake などの上で動かす
+   ============================================================ */
+/** Python の文字列リテラルにする（生成したコードが壊れないように） */
+function pyStr(v) {
+  return '"' + String(v)
+    .replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n").replace(/\r/g, "").replace(/\t/g, "\\t") + '"';
+}
+/** 出力シート名は Excel の制限に合わせる（画面の書き出しと同じ規則） */
+function safeSheetName(name, taken) {
+  var nm = String(name).replace(/[\\\/\?\*\[\]:]/g, "_").slice(0, 31) || "Sheet";
+  if (taken[nm]) { var k = 2; while (taken[nm + "_" + k]) k++; nm = (nm + "_" + k).slice(0, 31); }
+  taken[nm] = 1;
+  return nm;
+}
+/** 今の配置を、そのまま動く Python にする */
+function pythonFromBlocks(paths, outName) {
+  var d = new Date();
+  var stamp = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
+    + "-" + String(d.getDate()).padStart(2, "0");
+  var keepF = $("optFormula").checked, keepM = $("optMerge").checked;
+  var taken = {}, plan = [], used = {};
+  S.out.forEach(function (o) {
+    if (!o.blocks.length) return;
+    var nm = safeSheetName(o.name, taken);
+    o.blocks.forEach(function (b) {
+      var sh = S.sheets[b.sheet];
+      if (!sh) return;
+      var f = S.files[sh.file];
+      var fname = f ? f.name : "(不明)";
+      used[fname] = 1;
+      plan.push('    {"out": ' + pyStr(nm) + ', "file": ' + pyStr(fname)
+        + ', "sheet": ' + pyStr(sh.name) + ', "src": ' + pyStr(rangeLabel(b))
+        + ', "at": ' + pyStr(a1(b.dr, b.dc)) + ', "transpose": ' + (b.trans ? "True" : "False") + "},");
+    });
+  });
+  var srcLines = Object.keys(used).map(function (n) {
+    return "    " + pyStr(n) + ": " + pyStr((paths && paths[n]) || n) + ",";
+  });
+  var recipe = ($("scText").value || "").trim();
+  var recipeBlock = recipe
+    ? "\n手順書（画面で書いたもの。下の PLAN はこれを実行した結果です）\n"
+      + "----------------------------------------------------------\n" + recipe + "\n"
+    : "";
+
+  return [
+    "# -*- coding: utf-8 -*-",
+    '"""Excel 抜粋エディタ が書き出した処理です。',
+    "",
+    "  書き出した日: " + stamp,
+    "  元ファイル  : " + Object.keys(used).join(", "),
+    "  出力        : " + outName,
+    "",
+    "画面でやっているのと同じ抜き出しを、この 1 本だけで行います。",
+    "openpyxl のほかに必要なものはありません（Snowflake のノートブックでもそのまま動きます）。",
+    "",
+    "  1. 下の SOURCES に、元ファイルの置き場所を書く",
+    "  2. build() を呼ぶと OUTPUT に書き出す",
+    "  3. 続きの加工をするときは to_dataframes() で pandas に渡す",
+    escapePyDoc(recipeBlock),
+    '"""',
+    "from __future__ import annotations",
+    "",
+    "import openpyxl",
+    "from openpyxl.utils import column_index_from_string, get_column_letter",
+    "from openpyxl.utils.cell import coordinate_from_string, range_boundaries",
+    "",
+    "# ── 1. 入出力 ────────────────────────────────────────────",
+    "# 手順書に出てくるファイル名 → 実際の置き場所",
+    "SOURCES = {",
+    srcLines.join("\n"),
+    "}",
+    "OUTPUT = " + pyStr(outName),
+    "",
+    "KEEP_FORMULAS = " + (keepF ? "True" : "False") + "   # 数式を保持",
+    "KEEP_MERGES   = " + (keepM ? "True" : "False") + "   # 結合セルを保持",
+    "",
+    "# ── 2. 手順（画面の配置そのまま） ─────────────────────────",
+    "# out=出力シート名 / file,sheet,src=元データ / at=置き場所 / transpose=行列の入れ替え",
+    "PLAN = [",
+    plan.join("\n"),
+    "]",
+    "",
+    PY_RUNNER
+  ].join("\n");
+}
+/** 手順書の中の """ を無害にする（docstring を閉じてしまわないように） */
+function escapePyDoc(t) { return String(t).split('"""').join('\u201d\u201d\u201d'); }
+
+var PY_RUNNER = [
+  "# ── 3. 実行 ──────────────────────────────────────────────",
+  "def _open(path: str, keep_formulas: bool):",
+  "    \"\"\"数式を残すときは式のまま、残さないときは計算済みの値で読む。\"\"\"",
+  "    return openpyxl.load_workbook(path, data_only=not keep_formulas)",
+  "",
+  "",
+  "def build(sources: dict | None = None, output: str | None = None,",
+  "          keep_formulas: bool | None = None, keep_merges: bool | None = None):",
+  "    \"\"\"PLAN のとおりに抜き出して、1 つのブックにまとめて保存する。\"\"\"",
+  "    sources = SOURCES if sources is None else sources",
+  "    output = OUTPUT if output is None else output",
+  "    keep_formulas = KEEP_FORMULAS if keep_formulas is None else keep_formulas",
+  "    keep_merges = KEEP_MERGES if keep_merges is None else keep_merges",
+  "",
+  "    books = {name: _open(path, keep_formulas) for name, path in sources.items()}",
+  "    out = openpyxl.Workbook()",
+  "    out.remove(out.active)",
+  "",
+  "    for step in PLAN:",
+  "        book = books.get(step[\"file\"])",
+  "        if book is None:",
+  "            raise KeyError(f'元ファイル {step[\"file\"]!r} の置き場所が SOURCES にありません')",
+  "        if step[\"sheet\"] not in book.sheetnames:",
+  "            raise KeyError(f'{step[\"file\"]} に シート {step[\"sheet\"]!r} がありません')",
+  "        ws = book[step[\"sheet\"]]",
+  "        dst = out[step[\"out\"]] if step[\"out\"] in out.sheetnames else out.create_sheet(step[\"out\"])",
+  "",
+  "        c1, r1, c2, r2 = range_boundaries(step[\"src\"])          # 1 始まり",
+  "        at_col, at_row = coordinate_from_string(step[\"at\"])",
+  "        dc0, dr0 = column_index_from_string(at_col), at_row",
+  "        trans = step[\"transpose\"]",
+  "",
+  "        for i in range(r2 - r1 + 1):",
+  "            for j in range(c2 - c1 + 1):",
+  "                src = ws.cell(row=r1 + i, column=c1 + j)",
+  "                dr = dr0 + (j if trans else i)",
+  "                dc = dc0 + (i if trans else j)",
+  "                cell = dst.cell(row=dr, column=dc)",
+  "                cell.value = src.value",
+  "                if src.number_format and src.number_format != \"General\":",
+  "                    cell.number_format = src.number_format",
+  "",
+  "        # 列幅（先に書いたブロックを優先）",
+  "        if not trans:",
+  "            for j in range(c2 - c1 + 1):",
+  "                w = ws.column_dimensions[get_column_letter(c1 + j)].width",
+  "                letter = get_column_letter(dc0 + j)",
+  "                if w and dst.column_dimensions[letter].width is None:",
+  "                    dst.column_dimensions[letter].width = w",
+  "",
+  "        # 結合セル（抜き出した範囲に丸ごと入っているものだけ）",
+  "        if keep_merges and not trans:",
+  "            for mg in list(ws.merged_cells.ranges):",
+  "                if mg.min_row >= r1 and mg.max_row <= r2 and mg.min_col >= c1 and mg.max_col <= c2:",
+  "                    dst.merge_cells(",
+  "                        start_row=mg.min_row - r1 + dr0, start_column=mg.min_col - c1 + dc0,",
+  "                        end_row=mg.max_row - r1 + dr0, end_column=mg.max_col - c1 + dc0)",
+  "",
+  "    if not out.sheetnames:",
+  "        raise RuntimeError(\"PLAN が空です。画面で範囲を出力シートへ置いてから書き出してください\")",
+  "    out.save(output)",
+  "    return output",
+  "",
+  "",
+  "def to_dataframes(sources: dict | None = None, keep_formulas: bool | None = None):",
+  "    \"\"\"続きの加工を pandas でしたいとき。{出力シート名: DataFrame} を返す。",
+  "",
+  "    1 行目を見出しにはしない（画面の見え方をそのまま渡す）ので、",
+  "    必要なら df.columns = df.iloc[0] のように呼び出し側で決める。",
+  "    \"\"\"",
+  "    import pandas as pd                     # 使うときだけ読み込む",
+  "    import tempfile, os",
+  "",
+  "    tmp = os.path.join(tempfile.mkdtemp(), \"_extract.xlsx\")",
+  "    build(sources=sources, output=tmp, keep_formulas=keep_formulas)",
+  "    book = openpyxl.load_workbook(tmp, data_only=True)",
+  "    frames = {}",
+  "    for name in book.sheetnames:",
+  "        rows = [[c.value for c in row] for row in book[name].iter_rows()]",
+  "        frames[name] = pd.DataFrame(rows)",
+  "    os.remove(tmp)",
+  "    return frames",
+  "",
+  "",
+  "if __name__ == \"__main__\":",
+  "    print(\"書き出しました:\", build())",
+  ""
+].join("\n");
 
 /* --- 手順書に書けることの一覧（行にカーソルを合わせると動きで見せる） --- */
 /**
@@ -3996,6 +4207,61 @@ $("repeatValues").addEventListener("keydown", function (e) {
 });
 $("repeatCancel").addEventListener("click", hideRepeatForm);
 
+/* --- Python の書き出し --- */
+function showPyForm() {
+  if (!allBlocks().length) {
+    toast("先に範囲を出力シートへ置いてください", "wa");
+    return null;
+  }
+  var host = $("pyInputs");
+  host.innerHTML = "";
+  var used = {};
+  allBlocks().forEach(function (f) {
+    var sh = S.sheets[f.b.sheet];
+    if (!sh) return;
+    var fl = S.files[sh.file];
+    if (fl) used[fl.name] = 1;
+  });
+  Object.keys(used).forEach(function (name, i) {
+    host.appendChild(el("span", "fnm", name));
+    var inp = el("input", "inp");
+    inp.id = "pyPath" + i;
+    inp.dataset.file = name;
+    inp.value = name;
+    inp.placeholder = "元ファイルの置き場所（例 /stage/" + name + "）";
+    host.appendChild(inp);
+  });
+  $("pyOut").value = (S.fileName || "抜粋").replace(/\.[^.]+$/, "") + "_抜粋.xlsx";
+  $("pyForm").hidden = false;
+  $("scCheat").hidden = true;
+  $("scHelp").textContent = "書き方の一覧";
+  hideRepeatForm();
+  stopMini();
+  $("pyOut").focus();
+  $("pyOut").select();
+  return true;
+}
+function hidePyForm() { $("pyForm").hidden = true; }
+$("scPy").addEventListener("click", showPyForm);
+$("pyCancel").addEventListener("click", hidePyForm);
+$("pyOk").addEventListener("click", function () {
+  var paths = {};
+  $("pyInputs").querySelectorAll("input").forEach(function (n) {
+    paths[n.dataset.file] = n.value.trim() || n.dataset.file;
+  });
+  var outName = $("pyOut").value.trim() || "抜粋.xlsx";
+  if (!/\.xlsx$/i.test(outName)) outName += ".xlsx";
+  var code = pythonFromBlocks(paths, outName);
+  var base = outName.replace(/\.[^.]+$/, "");
+  saveBlob(new Blob([code], { type: "text/x-python;charset=utf-8" }), base + ".py");
+  hidePyForm();
+  toast(base + ".py を書き出しました。Snowflake などに貼ればそのまま動きます");
+});
+$("pyOut").addEventListener("keydown", function (e) {
+  if (e.key === "Enter") { e.preventDefault(); $("pyOk").click(); }
+  if (e.key === "Escape") { e.preventDefault(); hidePyForm(); }
+});
+
 $("scExport").addEventListener("click", function () {
   var txt = $("scText").value;
   if (!txt.trim()) { toast("手順書が空です", "wa"); return; }
@@ -4072,6 +4338,7 @@ window.__app = {
   sheetFullName: sheetFullName, matchSheetName: matchSheetName,
   showLoading: showLoading, setStage: setStage,
   CHEAT: CHEAT, insertLine: insertLine,
+  pythonFromBlocks: pythonFromBlocks, showPyForm: showPyForm,
   setZoom: setZoom, stepZoom: stepZoom, ZOOMS: ZOOMS,
   parseCell: parseCell, setMaxSrc: setMaxSrc, setMaxPane: setMaxPane, openHeaderMenu: openHeaderMenu,
   setDstSel: setDstSel, clearDstSel: clearDstSel,

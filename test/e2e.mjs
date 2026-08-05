@@ -4,6 +4,7 @@
  * Playwright と SheetJS はグローバル/ローカルどちらでも解決する。
  */
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -415,6 +416,111 @@ await page.waitForTimeout(150);
 
 // 元の状態に戻す
 await page.evaluate(() => { window.__app.clearDstSel(); });
+await loadSampleAgain();
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript(`シート追加 抜粋1
+売上明細のA2:D6を抜粋1のB3に置く
+売上明細のA1:C3を抜粋1のA13に置く
+支店別サマリのA2:C7を抜粋1のF3に置く
+シート追加 集計用
+商品マスタのA1:C7を集計用のB2に置く`, true);
+});
+await page.waitForTimeout(250);
+await page.click("#dstTabsHost .tab >> nth=0");
+
+// ---- 7c. Python への書き出し（同じ処理を Snowflake などで動かす） --------
+// 画面が書き出す xlsx と、書き出した Python が作る xlsx が一致することまで見る
+await loadSampleAgain();
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript(`シート追加 まとめ
+売上明細のA1:E8をまとめのA1に置く
+支店別サマリのA1:C7をまとめのG1に置く
+商品マスタのA1:C4をまとめのA11に置く（転置）`, true);
+});
+await page.waitForTimeout(250);
+
+await page.evaluate(() => window.__app.openScript(true));
+await page.click("#scPy");
+await page.waitForTimeout(150);
+check("Python の書き出し欄が出る", await page.isVisible("#pyForm"));
+check("元ファイルごとに置き場所を書ける",
+  (await page.$$eval("#pyInputs .fnm", (ns) => ns.map((n) => n.textContent))).join(",") === "サンプル売上.xlsx",
+  (await page.$$eval("#pyInputs .fnm", (ns) => ns.map((n) => n.textContent))).join(","));
+check("出力ファイル名の既定が入る",
+  (await page.inputValue("#pyOut")) === "サンプル売上_抜粋.xlsx", await page.inputValue("#pyOut"));
+
+const pyDir = join(tmp, "py");
+mkdirSync(pyDir, { recursive: true });
+await page.fill("#pyOut", "by-python.xlsx");
+const [dlPy] = await Promise.all([page.waitForEvent("download"), page.click("#pyOk")]);
+check("Python として書き出せる", dlPy.suggestedFilename() === "by-python.py", dlPy.suggestedFilename());
+await dlPy.saveAs(join(pyDir, "extract.py"));
+const pySrc = readFileSync(join(pyDir, "extract.py"), "utf8");
+check("入出力が先頭にまとまっている",
+  /SOURCES = \{/.test(pySrc) && /OUTPUT = "by-python\.xlsx"/.test(pySrc), pySrc.slice(0, 60));
+check("配置が手順として並ぶ",
+  (pySrc.match(/^\s+\{"out":/gm) || []).length === 3,
+  String((pySrc.match(/^\s+\{"out":/gm) || []).length));
+check("転置も引き継がれる", /"transpose": True/.test(pySrc));
+check("openpyxl 以外は要らない",
+  !/^import (?!openpyxl|from)/m.test(pySrc) && /import openpyxl/.test(pySrc));
+check("後処理へつなぐ入口がある", /def to_dataframes\(/.test(pySrc));
+
+// 実際に走らせて、画面の書き出しと突き合わせる（python3 と openpyxl があるときだけ）
+let pyReady = true;
+try { execFileSync("python3", ["-c", "import openpyxl"], { stdio: "ignore" }); } catch { pyReady = false; }
+if (!pyReady) {
+  console.log("  --   python3 / openpyxl が無いので、走らせての照合は省略");
+} else {
+  // 元データと、画面が書き出した xlsx を並べる
+  const uiPath = join(pyDir, "サンプル売上.xlsx");
+  writeFileSync(uiPath, Buffer.from(XLSX.write(await page.evaluate(() => {
+    const wb = window.__app.S.files[0].wb;
+    return { SheetNames: wb.SheetNames, Sheets: wb.Sheets };
+  }), { bookType: "xlsx", type: "buffer" })));
+  await page.evaluate(() => window.__app.openScript(false));
+  const [dlUi] = await Promise.all([page.waitForEvent("download"), page.click("#btnGen")]);
+  await dlUi.saveAs(join(pyDir, "by-ui.xlsx"));
+
+  let ran = "";
+  try { ran = execFileSync("python3", ["extract.py"], { cwd: pyDir, encoding: "utf8" }); }
+  catch (e) { ran = "ERROR " + (e.stderr || e.message); }
+  check("書き出した Python がそのまま走る", /書き出しました/.test(ran), ran.trim().slice(0, 120));
+
+  const byUi = XLSX.read(readFileSync(join(pyDir, "by-ui.xlsx")), { type: "buffer" });
+  const byPy = XLSX.read(readFileSync(join(pyDir, "by-python.xlsx")), { type: "buffer" });
+  check("出力シートの顔ぶれが同じ",
+    byUi.SheetNames.join(",") === byPy.SheetNames.join(","),
+    byUi.SheetNames.join(",") + " / " + byPy.SheetNames.join(","));
+  let pyDiff = 0, pyCells = 0, firstDiff = "";
+  const normv = (v) => (v instanceof Date ? v.toISOString().slice(0, 10)
+    : typeof v === "number" ? Math.round(v * 1e6) / 1e6 : v === undefined ? null : v);
+  for (const nm of byUi.SheetNames) {
+    const wa = byUi.Sheets[nm], wb2 = byPy.Sheets[nm] || {};
+    const rg = XLSX.utils.decode_range(wa["!ref"]);
+    for (let r = rg.s.r; r <= rg.e.r; r++) {
+      for (let c = rg.s.c; c <= rg.e.c; c++) {
+        const ad = XLSX.utils.encode_cell({ r, c });
+        pyCells++;
+        const va = normv(wa[ad] && wa[ad].v), vb = normv(wb2[ad] && wb2[ad].v);
+        if (JSON.stringify(va) !== JSON.stringify(vb)) {
+          if (!firstDiff) firstDiff = `${nm}!${ad} ${JSON.stringify(va)} vs ${JSON.stringify(vb)}`;
+          pyDiff++;
+        }
+      }
+    }
+    const ma = (wa["!merges"] || []).map((m) => XLSX.utils.encode_range(m)).sort().join(",");
+    const mb = (wb2["!merges"] || []).map((m) => XLSX.utils.encode_range(m)).sort().join(",");
+    check(`結合セルも同じ（${nm}）`, ma === mb, `${ma || "なし"} / ${mb || "なし"}`);
+  }
+  check("画面の書き出しと 1 セルも食い違わない", pyDiff === 0,
+    `${pyCells}セル中 ${pyDiff}件ちがう ${firstDiff}`);
+}
+await page.evaluate(() => window.__app.openScript(false));
 await loadSampleAgain();
 await page.evaluate(() => {
   const A = window.__app;
