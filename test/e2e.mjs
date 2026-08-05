@@ -374,7 +374,7 @@ const leftAfterDel = await page.$$eval("#blockList .block-card .row2 .to", (ns) 
 check("選んだ範囲に掛かるブロックだけ外れる",
   leftAfterDel.join(",") === "まとめて!A20", leftAfterDel.join(","));
 check("何件外したか知らせる",
-  /ブロック 2 件を外しました/.test(await page.textContent("#toasts")),
+  /2 件を消しました/.test(await page.textContent("#toasts")),
   (await page.textContent("#toasts")).slice(0, 60));
 await page.keyboard.press("Control+z");
 await page.waitForTimeout(200);
@@ -391,7 +391,7 @@ await page.waitForTimeout(200);
 check("何も無い範囲では消えない",
   (await page.$$eval("#blockList .block-card", (ns) => ns.length)) === 3);
 check("何も無いことを知らせる",
-  /選んだ範囲にブロックはありません/.test(await page.textContent("#toasts")),
+  /選んだ範囲にブロックや入力はありません/.test(await page.textContent("#toasts")),
   (await page.textContent("#toasts")).slice(0, 60));
 
 // 元データ側にいるときは効かない（うっかり消さない）
@@ -505,9 +505,149 @@ await page.click(".hmenu button >> nth=1");                     // 下に挿入�
 await page.waitForTimeout(150);
 check("動くブロックが無いときは何も変えない", (await insPos()) === "0,0 0,7 8,0", await insPos());
 check("動かない理由を知らせる",
-  /始まるブロックがないので/.test(await page.textContent("#toasts")),
+  /始まるブロックや入力がないので/.test(await page.textContent("#toasts")),
   (await page.textContent("#toasts")).slice(-80));
 await page.keyboard.press("Escape");
+
+// ---- 7b3. 出力シートへの直接入力とフィル ---------------------------------
+// セルに値・数式・日付を打ち込み、フィルハンドルで続きを引っぱる
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript("シート追加 入力\n売上明細のA1:E3を入力のA1に置く", true);
+});
+await page.waitForTimeout(250);
+
+// 文字 → Tab → 数式
+await page.dblclick('#dstGrid .gc[data-r="5"][data-c="0"]');
+check("ダブルクリックで入力欄が開く", (await page.locator(".celleditor").count()) === 1);
+await page.fill(".celleditor", "合計");
+await page.keyboard.press("Tab");
+await page.keyboard.type("=SUM(E2:E3)");
+await page.keyboard.press("Enter");
+await page.waitForTimeout(150);
+const typedCells = () => page.evaluate(() => window.__app.S.out[window.__app.S.activeOut].cells || {});
+check("文字と数式が入る", await page.evaluate(() => {
+  const cs = window.__app.S.out[window.__app.S.activeOut].cells;
+  return cs["5,0"].v === "合計" && cs["5,1"].t === "f" && cs["5,1"].v === "=SUM(E2:E3)";
+}), JSON.stringify(await typedCells()));
+check("入力したセルは色で分かる",
+  (await page.$$eval("#dstGrid .gcells .gc.edit", (ns) => ns.map((n) => n.textContent))).join(",").includes("合計"));
+
+// ブロックの上には入力できない
+{
+  const bb = await page.locator('#dstGrid .gcells .gc[data-r="1"][data-c="1"]').boundingBox();
+  await page.mouse.dblclick(bb.x + bb.width / 2, bb.y + bb.height / 2);
+}
+await page.waitForTimeout(120);
+check("ブロックの上では入力欄が開かない", (await page.locator(".celleditor").count()) === 0,
+  (await page.textContent("#toasts")).slice(-60));
+
+// 日付 → フィルハンドルで右に4つ → 1日ずつ足される
+await page.dblclick('#dstGrid .gc[data-r="7"][data-c="0"]');
+await page.fill(".celleditor", "2026/8/1");
+await page.keyboard.press("Enter");
+await page.waitForTimeout(120);
+await page.click('#dstGrid .gc[data-r="7"][data-c="0"]');
+await page.waitForTimeout(120);
+check("選択の右下にフィルハンドルが出る", (await page.locator("#dstGrid .fillhandle").count()) === 1);
+{
+  const fh = await page.locator("#dstGrid .fillhandle").boundingBox();
+  const tg = await page.locator('#dstGrid .gc[data-r="7"][data-c="4"]').boundingBox();
+  await page.mouse.move(fh.x + 4, fh.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(tg.x + tg.width / 2, tg.y + 6, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+}
+check("日付が1日ずつ増える", await page.evaluate(() => {
+  const cs = window.__app.S.out[window.__app.S.activeOut].cells;
+  return ["2026-08-02", "2026-08-03", "2026-08-04", "2026-08-05"]
+    .every((d, i) => cs["7," + (i + 1)] && cs["7," + (i + 1)].v === d);
+}), JSON.stringify(await typedCells()));
+await page.focus("#dstGrid");
+await page.keyboard.press("Control+z");
+await page.waitForTimeout(150);
+check("フィルも Ctrl+Z で戻せる", await page.evaluate(() => {
+  const cs = window.__app.S.out[window.__app.S.activeOut].cells;
+  return cs["7,0"] && !cs["7,1"];
+}), JSON.stringify(await typedCells()));
+
+// 数値2つの等差 → 下へ
+await page.dblclick('#dstGrid .gc[data-r="9"][data-c="0"]');
+await page.fill(".celleditor", "10");
+await page.keyboard.press("Enter");
+await page.keyboard.type("20");
+await page.keyboard.press("Enter");
+await page.waitForTimeout(120);
+await page.click('#dstGrid .gc[data-r="9"][data-c="0"]');
+await page.keyboard.down("Shift");
+await page.click('#dstGrid .gc[data-r="10"][data-c="0"]');
+await page.keyboard.up("Shift");
+await page.waitForTimeout(120);
+{
+  const fh = await page.locator("#dstGrid .fillhandle").boundingBox();
+  const tg = await page.locator('#dstGrid .gc[data-r="12"][data-c="0"]').boundingBox();
+  await page.mouse.move(fh.x + 4, fh.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(tg.x + 8, tg.y + tg.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+}
+check("数値は等差で続く（10,20 → 30,40）", await page.evaluate(() => {
+  const cs = window.__app.S.out[window.__app.S.activeOut].cells;
+  return cs["11,0"].v === 30 && cs["12,0"].v === 40;
+}), JSON.stringify(await typedCells()));
+
+// 数式のフィルは参照がずれる
+await page.dblclick('#dstGrid .gc[data-r="14"][data-c="0"]');
+await page.fill(".celleditor", "=E2*2");
+await page.keyboard.press("Enter");
+await page.waitForTimeout(120);
+await page.click('#dstGrid .gc[data-r="14"][data-c="0"]');
+{
+  const fh = await page.locator("#dstGrid .fillhandle").boundingBox();
+  const tg = await page.locator('#dstGrid .gc[data-r="15"][data-c="0"]').boundingBox();
+  await page.mouse.move(fh.x + 4, fh.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(tg.x + 8, tg.y + tg.height / 2, { steps: 4 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+}
+check("数式は参照をずらしてコピーされる（=E2*2 → =E3*2）", await page.evaluate(() => {
+  const cs = window.__app.S.out[window.__app.S.activeOut].cells;
+  return cs["15,0"] && cs["15,0"].v === "=E3*2";
+}), JSON.stringify(await typedCells()));
+
+// 書式（パーセント）と、選択への追随
+await page.dblclick('#dstGrid .gc[data-r="17"][data-c="0"]');
+await page.fill(".celleditor", "0.085");
+await page.keyboard.press("Enter");
+await page.click('#dstGrid .gc[data-r="17"][data-c="0"]');
+await page.selectOption("#cellFmt", "0.0%");
+await page.waitForTimeout(150);
+check("書式を選ぶと表示が変わる", await page.evaluate(() => {
+  const cs = window.__app.S.out[window.__app.S.activeOut].cells;
+  return cs["17,0"].z === "0.0%";
+}), JSON.stringify(await typedCells()));
+await page.click('#dstGrid .gc[data-r="20"][data-c="0"]');
+await page.waitForTimeout(100);
+await page.click('#dstGrid .gc[data-r="17"][data-c="0"]');
+await page.waitForTimeout(100);
+check("選択し直すと書式の欄に映る", (await page.inputValue("#cellFmt")) === "0.0%",
+  await page.inputValue("#cellFmt"));
+
+// Delete で入力も消える
+await page.click('#dstGrid .gc[data-r="5"][data-c="0"]');
+await page.keyboard.down("Shift");
+await page.click('#dstGrid .gc[data-r="5"][data-c="1"]');
+await page.keyboard.up("Shift");
+await page.keyboard.press("Delete");
+await page.waitForTimeout(150);
+check("Delete で直接入力も消せる", await page.evaluate(() => {
+  const cs = window.__app.S.out[window.__app.S.activeOut].cells;
+  return !cs["5,0"] && !cs["5,1"];
+}), JSON.stringify(await typedCells()));
 
 // ---- 7c. Python への書き出し（同じ処理を Snowflake などで動かす） --------
 // 画面が書き出す xlsx と、書き出した Python が作る xlsx が一致することまで見る
@@ -519,6 +659,12 @@ await page.evaluate(() => {
 売上明細のA1:E8をまとめのA1に置く
 支店別サマリのA1:C7をまとめのG1に置く
 商品マスタのA1:C4をまとめのA11に置く（転置）`, true);
+  // 直接入力（日付・数式・書式つき数値）も Python まで運ばれることを見る
+  A.S.out[0].cells = {
+    "14,0": { t: "d", v: "2026-08-01", z: "yyyy/m/d" },
+    "14,1": { t: "f", v: "=SUM(B2:B8)", z: null },
+    "14,2": { t: "n", v: 0.085, z: "0.0%" }
+  };
 });
 await page.waitForTimeout(250);
 
@@ -562,11 +708,11 @@ const pySrc = readFileSync(join(pyDir, "extract.py"), "utf8");
 check("入出力が先頭にまとまっている",
   /SOURCES = \[/.test(pySrc) && /OUTPUT = "by-python\.xlsx"/.test(pySrc), pySrc.slice(0, 60));
 check("配置が手順として並ぶ",
-  (pySrc.match(/^\s+\{"out":/gm) || []).length === 3,
-  String((pySrc.match(/^\s+\{"out":/gm) || []).length));
+  (pySrc.match(/^\s+\{"out": .*"file":/gm) || []).length === 3,
+  String((pySrc.match(/^\s+\{"out": .*"file":/gm) || []).length));
 check("転置も引き継がれる", /"transpose": True/.test(pySrc));
 const pyImports = [...pySrc.matchAll(/^(?:import|from) ([\w.]+)/gm)].map((m) => m[1]);
-const pyStd = ["__future__", "difflib", "io", "os", "re", "tempfile", "unicodedata"];
+const pyStd = ["__future__", "datetime", "difflib", "io", "os", "re", "tempfile", "unicodedata"];
 check("外から入れるのは openpyxl だけ",
   pyImports.includes("openpyxl")
   && pyImports.every((m) => m === "openpyxl" || m.startsWith("openpyxl.") || pyStd.includes(m)),
@@ -581,6 +727,10 @@ check("保存できない場所でも渡せる口がある", /def build_bytes\(/
 check("書き出すシート名が先頭にまとまっている",
   /SHEETS = \{/.test(pySrc) && /"まとめ": "まとめ"/.test(pySrc),
   (pySrc.match(/SHEETS = \{[^}]*\}/) || [""])[0].replace(/\s+/g, " "));
+check("直接入力は EDITS として運ばれる",
+  /EDITS = \[/.test(pySrc) && /"kind": "d", "value": "2026-08-01"/.test(pySrc)
+  && /"kind": "f", "value": "=SUM\(B2:B8\)"/.test(pySrc),
+  (pySrc.match(/\{"out".*"kind".*\},/g) || []).slice(0, 2).join(" "));
 // ネットワーク上のファイルシステム（seek が使えない）でも動くこと
 check("ファイルの読み書きは頭から一気に（seek を使わない）",
   /def read_bytes\(/.test(pySrc) && /os\.read\(/.test(pySrc)
@@ -640,6 +790,21 @@ if (!pyReady) {
   }
   check("画面の書き出しと 1 セルも食い違わない", pyDiff === 0,
     `${pyCells}セル中 ${pyDiff}件ちがう ${firstDiff}`);
+
+  // 数式・日付・書式が、Python の書き出しでも生きていること（openpyxl で確かめる）
+  writeFileSync(join(pyDir, "edits-check.py"), [
+    "import openpyxl",
+    'ws = openpyxl.load_workbook("by-python.xlsx")["まとめ"]',
+    'print("F", ws["B15"].value)',
+    'print("D", ws["A15"].value, ws["A15"].number_format)',
+    'print("P", ws["C15"].value, ws["C15"].number_format)',
+  ].join("\n"));
+  let ranEd = "";
+  try { ranEd = execFileSync("python3", ["edits-check.py"], { cwd: pyDir, encoding: "utf8" }); }
+  catch (e) { ranEd = "ERROR " + (e.stderr || e.message); }
+  check("数式が数式のまま入る", /F =SUM\(B2:B8\)/.test(ranEd), ranEd.trim());
+  check("日付が日付として入る", /D 2026-08-01 00:00:00 yyyy\/m\/d/.test(ranEd), ranEd.trim());
+  check("書式も引き継がれる", /P 0\.085 0\.0%/.test(ranEd), ranEd.trim());
 
   // 書き出すシート名を、画面とちがう名前にできること
   await page.evaluate(() => window.__app.openScript(true));

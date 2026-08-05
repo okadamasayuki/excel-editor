@@ -690,6 +690,25 @@ body.srcmax .splitter, body.dstmax .splitter { display: none; }
 .cellstats .k { color: var(--muted); font-family: var(--font-ui); font-size: 10.5px; }
 /* 出力側の選択枠 */
 .selbox.out { background: var(--dst-soft); border-color: var(--dst); }
+/* 直接入力したセル */
+.gc.edit { color: var(--dst); }
+.gc.edit.num { color: var(--dst); }
+/* セルの入力欄（出力シートの上に重ねる） */
+.celleditor {
+  position: absolute; z-index: 40; box-sizing: border-box; min-width: 60px;
+  border: 2px solid var(--dst); border-radius: 1px; background: var(--surface); color: var(--ink);
+  font-family: var(--font-mono); font-size: 11.5px; padding: 0 4px; outline: none;
+}
+/* フィルハンドル（選択の右下の四角。引っぱると連続データ） */
+.fillhandle {
+  position: absolute; z-index: 26; width: 9px; height: 9px;
+  background: var(--dst); border: 1.5px solid var(--surface); border-radius: 1px;
+  cursor: crosshair; pointer-events: auto; touch-action: none;
+}
+.fillghost {
+  position: absolute; z-index: 24; pointer-events: none;
+  border: 1.5px dashed var(--dst); border-radius: 1px; background: transparent;
+}
 .chk { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--ink-2); }
 .chk.off { opacity: .45; cursor: not-allowed; }
 .chk input { accent-color: var(--dst); }
@@ -979,6 +998,18 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         <span class="sep"></span>
         <label class="chk" id="inspTransWrap" title="選んだブロックの行と列を入れ替えます">
           <input type="checkbox" id="inspTrans" disabled> 行列を入れ替える</label>
+        <span class="sep"></span>
+        <label class="chk" for="cellFmt" title="選んだ範囲の、直接入力したセルの書式">書式
+          <select class="inp sm" id="cellFmt">
+            <option value="">標準</option>
+            <option value="yyyy/m/d">日付 2026/8/5</option>
+            <option value="m/d">日付 8/5</option>
+            <option value="#,##0">数値 1,234</option>
+            <option value="0.00">小数 12.00</option>
+            <option value="0.0%">パーセント 8.5%</option>
+            <option value="¥#,##0">通貨 ¥1,234</option>
+            <option value="@">文字列</option>
+          </select></label>
         <span class="zoom" id="zoomDst" role="group" aria-label="出力シートの表示倍率">
           <button type="button" data-z="-1" aria-label="縮小" title="縮小">−</button>
           <button type="button" class="zl" data-z="0" title="クリックで 100% に戻す">100%</button>
@@ -986,7 +1017,7 @@ select.inp { padding: 4px 6px; font-family: var(--font-ui); max-width: 150px; }
         </span>
       </div>
       <div class="gridwrap dst" id="dstGrid" tabindex="0"
-           title="行・列の見出しをクリック、または Shift+ドラッグで範囲を選ぶと、個数や合計が出ます。Delete で、その範囲のブロックをまとめて外せます"></div>
+           title="ダブルクリック（または F2）で値・数式・日付を直接入力。選択の右下の■を引っぱると続きが入ります。Delete で、選んだ範囲のブロックや入力をまとめて消せます"></div>
       <div class="dstfoot" id="dstFoot">
         <span class="cellstats" id="dstStats" hidden></span>
       </div>
@@ -2203,6 +2234,65 @@ function addOutSheet(name, silent) {
   return S.out[S.out.length - 1];
 }
 
+/* --- 直接入力したセル（値・数式・日付） ---
+   o.cells["行,列"] = { t: "n"(数値) | "d"(日付) | "s"(文字) | "f"(数式), v: 値, z: 書式 } */
+function outCells(o) { if (!o.cells) o.cells = {}; return o.cells; }
+function hasCells(o) { return !!(o && o.cells && Object.keys(o.cells).length); }
+
+function dateToSerial(iso) {
+  var p = iso.split("-");
+  return Math.round((Date.UTC(+p[0], +p[1] - 1, +p[2]) - Date.UTC(1899, 11, 30)) / 86400000);
+}
+function serialToIso(n) {
+  return new Date(Date.UTC(1899, 11, 30) + n * 86400000).toISOString().slice(0, 10);
+}
+function fmtIsoDate(iso, z) {
+  var p = iso.split("-");
+  return z === "m/d" ? (+p[1]) + "/" + (+p[2]) : p[0] + "/" + (+p[1]) + "/" + (+p[2]);
+}
+/** 入力文字列をセルにする（= は数式、数字は数値、日付らしければ日付、それ以外は文字） */
+function parseCellInput(txt) {
+  var s = String(txt).trim();
+  if (!s) return null;
+  if (s[0] === "=") return { t: "f", v: s, z: null };
+  var num = s.replace(/,/g, "");
+  if (/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(num)) return { t: "n", v: parseFloat(num), z: s.indexOf(",") >= 0 ? "#,##0" : null };
+  if (/^[+-]?(\d+\.?\d*|\.\d+)%$/.test(num)) return { t: "n", v: parseFloat(num) / 100, z: "0.0%" };
+  var m = s.match(/^(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})日?$/) ||
+          (function () { var m2 = s.match(/^(\d{1,2})[\/月](\d{1,2})日?$/);
+            return m2 ? [m2[0], new Date().getFullYear(), m2[1], m2[2], "m/d"] : null; })();
+  if (m) {
+    var y = +m[1], mo = +m[2], d = +m[3];
+    var dt = new Date(Date.UTC(y, mo - 1, d));
+    if (dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d)
+      return { t: "d", v: dt.toISOString().slice(0, 10), z: m[4] || "yyyy/m/d" };
+  }
+  return { t: "s", v: s, z: null };
+}
+/** セルを編集欄に戻すときの文字列 */
+function cellToText(cell) {
+  if (!cell) return "";
+  if (cell.t === "d") return fmtIsoDate(cell.v, cell.z);
+  return String(cell.v);
+}
+/** 画面・集計向けの見え方（SheetJS のセルと同じ形にそろえる） */
+function viewCell(cell) {
+  if (cell.t === "d") return { t: "d", v: cell.v, w: fmtIsoDate(cell.v, cell.z), ed: 1 };
+  if (cell.t === "f") return { t: "f", v: cell.v, w: cell.v, ed: 1 };
+  if (cell.t === "n") return { t: "n", v: cell.v, w: fmtTypedNum(cell.v, cell.z), ed: 1 };
+  return { t: "s", v: cell.v, w: String(cell.v), ed: 1 };
+}
+function fmtTypedNum(v, z) {
+  if (z === "#,##0" || z === "¥#,##0") {
+    var s = Math.round(v).toLocaleString("ja-JP");
+    return z === "¥#,##0" ? "¥" + s : s;
+  }
+  if (z === "0.00") return v.toFixed(2);
+  if (z === "0.0%") return (v * 100).toFixed(1) + "%";
+  if (z === "yyyy/m/d" || z === "m/d") return fmtIsoDate(serialToIso(Math.round(v)), z);
+  return String(v);
+}
+
 /** 出力シートの内容マップ（後勝ち）。overlap には重なりを記録。 */
 function outContent(o) {
   var map = {}, overlap = {}, maxR = -1, maxC = -1;
@@ -2223,6 +2313,15 @@ function outContent(o) {
       }
     }
   });
+  // 直接入力したセル（ブロックの下にあるものは隠れる）
+  var cells = o.cells || {};
+  Object.keys(cells).forEach(function (key) {
+    if (map[key]) return;
+    map[key] = { cell: viewCell(cells[key]), ed: 1 };
+    var p = key.split(",");
+    if (+p[0] > maxR) maxR = +p[0];
+    if (+p[1] > maxC) maxC = +p[1];
+  });
   return { map: map, overlap: overlap, maxR: maxR, maxC: maxC };
 }
 
@@ -2234,7 +2333,9 @@ var dstGrid = makeGrid($("dstGrid"), {
     if (!hit || !hit.cell) return { cls: "blank" };
     var cell = hit.cell;
     var t = cell.w != null ? cell.w : (cell.v != null ? String(cell.v) : "");
-    return { text: t, cls: cell.t === "n" ? "num" : (cell.t === "b" ? "bool" : "") };
+    var cls = cell.t === "n" ? "num" : (cell.t === "b" ? "bool" : "");
+    if (hit.ed) cls += " edit";
+    return { text: t, cls: cls };
   },
   afterDraw: function () { placeOutChips(); }
 });
@@ -2320,6 +2421,12 @@ function renderOutOverlay(cont) {
     var sn = el("div", "selbox out");
     sn.style.cssText = "left:" + sb.left + "px;top:" + sb.top + "px;width:" + sb.width + "px;height:" + sb.height + "px;";
     ovl.appendChild(sn);
+    // 右下のフィルハンドル（引っぱると連続データ）
+    var fh = el("div", "fillhandle");
+    fh.title = "引っぱると続きが入ります（日付は 1 日ずつ）";
+    fh.style.cssText = "left:" + (sb.left + sb.width - 5) + "px;top:" + (sb.top + sb.height - 5) + "px;";
+    fh.addEventListener("pointerdown", startFillDrag);
+    ovl.appendChild(fh);
   }
   o.blocks.forEach(function (b, bi) {
     var h = b.r2 - b.r1 + 1, w = b.c2 - b.c1 + 1;
@@ -2386,6 +2493,7 @@ function setDstSel(r1, c1, r2, c2) {
   S.dsel = normRange(r1, c1, r2, c2);
   renderOutOverlay(outCache);
   renderDstStats();
+  reflectCellFmt();
 }
 function clearDstSel() {
   if (!S.dsel) return;
@@ -2478,13 +2586,20 @@ function deleteBlocksInSel() {
     var r = blockRect(b);
     if (r.r1 <= g.r2 && r.r2 >= g.r1 && r.c1 <= g.c2 && r.c2 >= g.c1) doomed[b.id] = 1;
   });
+  // 直接入力したセルも、範囲の中のものは一緒に消す
+  var cells = o.cells || {}, keys = [];
+  Object.keys(cells).forEach(function (key) {
+    var p = key.split(",");
+    if (+p[0] >= g.r1 && +p[0] <= g.r2 && +p[1] >= g.c1 && +p[1] <= g.c2) keys.push(key);
+  });
   var n = Object.keys(doomed).length;
-  if (!n) return 0;
+  if (!n && !keys.length) return 0;
   snapshot();
   o.blocks = o.blocks.filter(function (b) { return !doomed[b.id]; });
+  keys.forEach(function (key) { delete cells[key]; });
   if (doomed[S.selBlock]) S.selBlock = null;
   renderOut(); renderBlockList();
-  return n;
+  return n + keys.length;
 }
 
 function addBlock(src, dr, dc, outSheet) {
@@ -2736,14 +2851,314 @@ function clearGhost() {
     var hit = dstGrid.cellAt(e.clientX, e.clientY, false);
     if (!hit) return;
     var h = outCache.map[hit.r + "," + hit.c], o = activeOut();
-    if (!h || !o || !o.blocks[h.bi]) return;
+    if (!h || h.ed || !o || !o.blocks[h.bi]) return;
     var bb = o.blocks[h.bi];
     selectBlock(bb.id);
     var bs = rangeSize(bb);
     var bh = bb.trans ? bs.w : bs.h, bw = bb.trans ? bs.h : bs.w;
     setDstSel(bb.dr, bb.dc, bb.dr + bh - 1, bb.dc + bw - 1);
   });
+
+  // ダブルクリック（または F2 / そのまま文字を打つ）で、そのセルに直接入力
+  wrap.addEventListener("dblclick", function (e) {
+    var hit = dstGrid.cellAt(e.clientX, e.clientY, false);
+    if (!hit) return;
+    var h = outCache.map[hit.r + "," + hit.c];
+    if (!h || h.ed) setDstSel(hit.r, hit.c, hit.r, hit.c);      // ブロック上なら選択は崩さない
+    openCellEditor(hit.r, hit.c);
+  });
+  wrap.addEventListener("keydown", function (e) {
+    if (editorEl) return;                                       // 入力中は入力欄が受け持つ
+    var g = S.dsel;
+    if (!g) return;
+    var k = e.key;
+    if (k === "F2" || k === "Enter") {
+      e.preventDefault();
+      openCellEditor(g.r1, g.c1);
+      return;
+    }
+    // 矢印で選択を動かす（Shift で広げる）
+    var step = e.ctrlKey || e.metaKey ? 10 : 1;
+    var dr = k === "ArrowDown" ? step : k === "ArrowUp" ? -step : 0;
+    var dc = k === "ArrowRight" ? step : k === "ArrowLeft" ? -step : 0;
+    if (dr || dc) {
+      e.preventDefault();
+      if (e.shiftKey) setDstSel(g.r1, g.c1, clamp(g.r2 + dr, 0, dstGrid.rows - 1), clamp(g.c2 + dc, 0, dstGrid.cols - 1));
+      else {
+        var r = clamp(g.r1 + dr, 0, dstGrid.rows - 1), c = clamp(g.c1 + dc, 0, dstGrid.cols - 1);
+        setDstSel(r, c, r, c);
+      }
+      dstGrid.scrollToCell(S.dsel.r2, S.dsel.c2);
+      return;
+    }
+    // 文字をそのまま打ち始めたら、そのセルへの入力になる（Excel と同じ）
+    if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      openCellEditor(g.r1, g.c1, k);
+    }
+  });
 })();
+
+/* --- 出力シートへの直接入力（値・数式・日付） --- */
+var editorEl = null, editorAt = null;
+
+function colIdx(letters) {
+  var n = 0;
+  for (var i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
+  return n - 1;
+}
+/** 数式の相対参照をずらす（$ で止めてあるところは動かさない） */
+function shiftFormula(f, dr, dc) {
+  return String(f).replace(/(\$?)([A-Za-z]{1,3})(\$?)(\d{1,7})/g, function (m, d1, col, d2, row, at, str) {
+    var before = at > 0 ? str[at - 1] : "";
+    var after = str[at + m.length] || "";
+    // LOG10( のような関数名や、名前の一部は参照ではない
+    if (/[A-Za-z0-9_.]/.test(before) || after === "(" || /[A-Za-z0-9_]/.test(after)) return m;
+    var c = d1 ? col.toUpperCase() : colName(clamp(colIdx(col.toUpperCase()) + dc, 0, 16383));
+    var r = d2 ? +row : Math.max(1, +row + dr);
+    return d1 + (d1 ? col : c) + d2 + r;
+  });
+}
+/** セルの入力欄を開く。text を渡すとその文字から書き始める */
+function openCellEditor(r, c, text) {
+  var o = activeOut();
+  if (!o) return;
+  var hit = outCache.map[r + "," + c];
+  if (hit && !hit.ed) { toast("ブロックの上には入力できません（ブロックは元データとつながっています）", "wa"); return; }
+  closeCellEditor(false);
+  var box = dstGrid.box({ r1: r, c1: c, r2: r, c2: c });
+  editorEl = el("input", "celleditor");
+  editorEl.style.cssText = "left:" + box.left + "px;top:" + box.top + "px;width:"
+    + Math.max(box.width + 1, 72) + "px;height:" + (box.height + 1) + "px;";
+  editorEl.value = text != null ? text : cellToText(outCells(o)[r + "," + c]);
+  editorAt = { r: r, c: c };
+  editorEl.addEventListener("keydown", function (e) {
+    e.stopPropagation();
+    if (e.key === "Enter") { e.preventDefault(); commitCellEditor(); moveDsel(1, 0); }
+    else if (e.key === "Tab") { e.preventDefault(); commitCellEditor(); moveDsel(0, 1); }
+    else if (e.key === "Escape") { e.preventDefault(); closeCellEditor(false); $("dstGrid").focus(); }
+  });
+  editorEl.addEventListener("blur", function () { commitCellEditor(true); });
+  dstGrid.canvas.appendChild(editorEl);
+  editorEl.focus();
+  if (text == null) editorEl.select();
+}
+function closeCellEditor(commit) {
+  if (!editorEl) return;
+  var node = editorEl;
+  editorEl = null; editorAt = null;      // blur の再入を防ぐ
+  if (node.parentNode) node.parentNode.removeChild(node);
+}
+function commitCellEditor(fromBlur) {
+  if (!editorEl || !editorAt) return;
+  var o = activeOut();
+  var txt = editorEl.value, at = editorAt;
+  closeCellEditor();
+  if (!fromBlur) $("dstGrid").focus();
+  if (!o) return;
+  var key = at.r + "," + at.c;
+  var cells = outCells(o);
+  var cell = parseCellInput(txt);
+  var before = cells[key] ? JSON.stringify(cells[key]) : "";
+  var after = cell ? JSON.stringify(cell) : "";
+  if (before === after) return;
+  snapshot();
+  if (cell) cells[key] = cell; else delete cells[key];
+  renderOut(); renderBlockList();
+}
+/** 選択を 1 セルぶん動かす（入力の Enter / Tab から） */
+function moveDsel(dr, dc) {
+  var g = S.dsel;
+  if (!g) return;
+  var r = clamp(g.r1 + dr, 0, dstGrid.rows - 1), c = clamp(g.c1 + dc, 0, dstGrid.cols - 1);
+  setDstSel(r, c, r, c);
+  dstGrid.scrollToCell(r, c);
+}
+
+/* --- フィル（選択の右下を引っぱって連続データ） --- */
+var fillDrag = null, fillGhostEl = null;
+
+/** その位置の値（直接入力 or ブロックの中身）をフィルの種として読む */
+function sourceCellAt(o, r, c) {
+  var typed = (o.cells || {})[r + "," + c];
+  if (typed) return { t: typed.t, v: typed.v, z: typed.z };
+  var hit = outCache.map[r + "," + c];
+  if (!hit || !hit.cell) return null;
+  var cell = hit.cell;
+  if (cell.v instanceof Date) return { t: "d", v: cell.v.toISOString().slice(0, 10), z: "yyyy/m/d" };
+  if (cell.t === "n") return { t: "n", v: cell.v, z: cell.z || null };
+  return { t: "s", v: String(cell.w != null ? cell.w : cell.v), z: null };
+}
+/**
+ * 並びの続きを作る。日付は 1 日ずつ（2 個以上選ぶとその間隔）、
+ * 数値は 2 個以上で等差、1 個ならコピー。「第1回」のような末尾の数字は増える。
+ * 数式は参照をずらしながらコピー。
+ */
+function seriesNext(src, k, offMaker) {
+  var last = src[src.length - 1];
+  if (src.every(function (s) { return s && s.t === "d"; })) {
+    var step = src.length > 1
+      ? dateToSerial(last.v) - dateToSerial(src[src.length - 2].v) : 1;
+    return { t: "d", v: serialToIso(dateToSerial(last.v) + step * k), z: last.z };
+  }
+  if (src.every(function (s) { return s && s.t === "n"; })) {
+    if (src.length === 1) return { t: "n", v: last.v, z: last.z };
+    var d = last.v - src[src.length - 2].v;
+    return { t: "n", v: last.v + d * k, z: last.z };
+  }
+  var pick = src[(k - 1) % src.length];
+  if (!pick) return null;
+  if (pick.t === "f") {
+    var off = offMaker(k, (k - 1) % src.length);
+    return { t: "f", v: shiftFormula(pick.v, off.dr, off.dc), z: pick.z };
+  }
+  if (src.length === 1 && pick.t === "s") {
+    var m = String(pick.v).match(/^(.*?)(\d+)$/);
+    if (m) return { t: "s", v: m[1] + (parseInt(m[2], 10) + k), z: null };
+  }
+  return { t: pick.t, v: pick.v, z: pick.z };
+}
+/** base の選択から down/right へ、target まで連続データを書き込む */
+function applyFill(base, dir, target) {
+  var o = activeOut();
+  if (!o) return;
+  var cells = outCells(o), wrote = 0, blocked = 0;
+  snapshot();
+  if (dir === "down") {
+    for (var c = base.c1; c <= base.c2; c++) {
+      var src = [];
+      for (var r0 = base.r1; r0 <= base.r2; r0++) src.push(sourceCellAt(o, r0, c));
+      if (src.every(function (s) { return !s; })) continue;
+      var srcH = base.r2 - base.r1 + 1;
+      for (var r = base.r2 + 1; r <= target; r++) {
+        var k = r - base.r2;
+        var hit = outCache.map[r + "," + c];
+        if (hit && !hit.ed) { blocked++; continue; }              // ブロックは上書きしない
+        var made = seriesNext(src, k, function (kk, si) { return { dr: r - (base.r1 + si), dc: 0 }; });
+        if (!made) continue;
+        cells[r + "," + c] = made; wrote++;
+      }
+    }
+  } else {
+    for (var r2 = base.r1; r2 <= base.r2; r2++) {
+      var src2 = [];
+      for (var c0 = base.c1; c0 <= base.c2; c0++) src2.push(sourceCellAt(o, r2, c0));
+      if (src2.every(function (s) { return !s; })) continue;
+      for (var c2 = base.c2 + 1; c2 <= target; c2++) {
+        var k2 = c2 - base.c2;
+        var hit2 = outCache.map[r2 + "," + c2];
+        if (hit2 && !hit2.ed) { blocked++; continue; }
+        var made2 = seriesNext(src2, k2, function (kk, si) { return { dr: 0, dc: c2 - (base.c1 + si) }; });
+        if (!made2) continue;
+        cells[r2 + "," + c2] = made2; wrote++;
+      }
+    }
+  }
+  renderOut(); renderBlockList();
+  if (dir === "down") setDstSel(base.r1, base.c1, target, base.c2);
+  else setDstSel(base.r1, base.c1, base.r2, target);
+  var msg = wrote + " セルに続きを入れました（Ctrl+Z で戻せます）";
+  if (blocked) msg += "。ブロックの上の " + blocked + " セルはそのまま";
+  toast(wrote ? msg : "続きを書ける中身がありませんでした", wrote ? undefined : "wa");
+}
+function clearFillGhost() {
+  if (fillGhostEl && fillGhostEl.parentNode) fillGhostEl.parentNode.removeChild(fillGhostEl);
+  fillGhostEl = null;
+}
+function startFillDrag(e) {
+  if (!S.dsel) return;
+  e.preventDefault();
+  e.stopPropagation();
+  fillDrag = { base: { r1: S.dsel.r1, c1: S.dsel.c1, r2: S.dsel.r2, c2: S.dsel.c2 } };
+  var fh = e.currentTarget;
+  fh.setPointerCapture(e.pointerId);
+  fh.addEventListener("pointermove", moveFillDrag);
+  fh.addEventListener("pointerup", endFillDrag);
+  fh.addEventListener("pointercancel", cancelFillDrag);
+}
+function fillTargetFromPoint(x, y) {
+  var b = fillDrag.base;
+  var hit = dstGrid.cellAt(x, y, true);
+  if (!hit) return null;
+  var downBy = hit.r - b.r2, rightBy = hit.c - b.c2;
+  if (downBy <= 0 && rightBy <= 0) return null;
+  if (downBy >= rightBy) return { dir: "down", to: hit.r };
+  return { dir: "right", to: hit.c };
+}
+function moveFillDrag(e) {
+  if (!fillDrag) return;
+  var t = fillTargetFromPoint(e.clientX, e.clientY);
+  fillDrag.target = t;
+  clearFillGhost();
+  if (!t) return;
+  var b = fillDrag.base;
+  var g = t.dir === "down"
+    ? { r1: b.r1, c1: b.c1, r2: t.to, c2: b.c2 }
+    : { r1: b.r1, c1: b.c1, r2: b.r2, c2: t.to };
+  var box = dstGrid.box(g);
+  fillGhostEl = el("div", "fillghost");
+  fillGhostEl.style.cssText = "left:" + box.left + "px;top:" + box.top + "px;width:"
+    + box.width + "px;height:" + box.height + "px;";
+  dstGrid.overlay.appendChild(fillGhostEl);
+}
+function endFillDrag(e) {
+  var d = fillDrag;
+  cancelFillDrag(e);
+  if (d && d.target) applyFill(d.base, d.target.dir, d.target.to);
+}
+function cancelFillDrag(e) {
+  clearFillGhost();
+  fillDrag = null;
+  var fh = e.currentTarget;
+  if (fh) {
+    try { fh.releasePointerCapture(e.pointerId); } catch (err) {}
+    fh.removeEventListener("pointermove", moveFillDrag);
+    fh.removeEventListener("pointerup", endFillDrag);
+    fh.removeEventListener("pointercancel", cancelFillDrag);
+  }
+}
+
+/* --- 直接入力の書式（選んだ範囲に適用） --- */
+$("cellFmt").addEventListener("change", function () {
+  var o = activeOut(), g = S.dsel;
+  var z = $("cellFmt").value || null;
+  if (!o || !g) { toast("先に出力シートで範囲を選んでください", "wa"); return; }
+  var cells = outCells(o), n = 0;
+  var maybe = [];
+  for (var r = g.r1; r <= g.r2; r++) {
+    for (var c = g.c1; c <= g.c2; c++) {
+      var cell = cells[r + "," + c];
+      if (cell) maybe.push(cell);
+    }
+  }
+  if (!maybe.length) { toast("選んだ範囲に、直接入力したセルがありません（書式はブロックには効きません）", "wa"); return; }
+  snapshot();
+  maybe.forEach(function (cell) {
+    cell.z = z;
+    // 日付書式を数値に・数値書式を日付に掛けたときは、意味も一緒に変える
+    if (cell.t === "d" && z && z.indexOf("d") < 0 && z !== "@") { cell.t = "n"; cell.v = dateToSerial(cell.v); }
+    else if (cell.t === "n" && (z === "yyyy/m/d" || z === "m/d")) { cell.t = "d"; cell.v = serialToIso(Math.round(cell.v)); }
+    n++;
+  });
+  renderOut();
+  toast(n + " セルの書式を「" + ($("cellFmt").selectedOptions[0].textContent) + "」にしました");
+});
+/** 選択が変わったら、その範囲の書式をセレクトに映す */
+function reflectCellFmt() {
+  var o = activeOut(), g = S.dsel, sel = $("cellFmt");
+  if (!o || !g) { sel.value = ""; return; }
+  var z = null, seen = false, mixed = false;
+  var cells = o.cells || {};
+  for (var r = g.r1; r <= g.r2 && !mixed; r++) {
+    for (var c = g.c1; c <= g.c2 && !mixed; c++) {
+      var cell = cells[r + "," + c];
+      if (!cell) continue;
+      if (!seen) { z = cell.z || ""; seen = true; }
+      else if ((cell.z || "") !== z) mixed = true;
+    }
+  }
+  sel.value = seen && !mixed ? z : "";
+}
 
 /* --- 出力シートへの行・列の差し込み --- */
 /** いま選んでいるのが「行まるごと・列まるごとの帯」で、押した見出しがその中なら帯ごと扱う */
@@ -2771,14 +3186,27 @@ function insertDstLines(kind, at, n) {
     if (start >= at) moved++;
     else if (start + len - 1 >= at) spanned++;
   });
-  if (!moved) {
-    toast("ここから" + (isRow ? "下" : "右") + "に始まるブロックがないので、挿入しても変わりません", "wa");
+  var cells = o.cells || {}, movedKeys = [];
+  Object.keys(cells).forEach(function (key) {
+    var p = key.split(",");
+    if ((isRow ? +p[0] : +p[1]) >= at) movedKeys.push(key);
+  });
+  if (!moved && !movedKeys.length) {
+    toast("ここから" + (isRow ? "下" : "右") + "に始まるブロックや入力がないので、挿入しても変わりません", "wa");
     return;
   }
   snapshot();
   o.blocks.forEach(function (b) {
     if ((isRow ? b.dr : b.dc) >= at) { if (isRow) b.dr += n; else b.dc += n; }
   });
+  var movedCells = {};
+  movedKeys.forEach(function (key) {
+    var p = key.split(",");
+    movedCells[(+p[0] + (isRow ? n : 0)) + "," + (+p[1] + (isRow ? 0 : n))] = cells[key];
+    delete cells[key];
+  });
+  Object.keys(movedCells).forEach(function (key) { cells[key] = movedCells[key]; });
+  moved += movedKeys.length;
   renderOut(); renderBlockList();
   // 差し込んだ空きを選んで見せる（Ctrl+Z で戻せる）
   var lastR = Math.max(outCache.maxR, 0), lastC = Math.max(outCache.maxC, 0);
@@ -3506,7 +3934,7 @@ function buildWorkbook() {
   var made = 0, taken = {};
 
   S.out.forEach(function (o) {
-    if (!o.blocks.length) return;
+    if (!o.blocks.length && !hasCells(o)) return;
     var ws = {}, maxR = 0, maxC = 0, merges = [], cols = [];
 
     o.blocks.forEach(function (b) {
@@ -3545,6 +3973,23 @@ function buildWorkbook() {
           }
         });
       }
+    });
+
+    // 直接入力したセル（ブロックの下にあるものはブロックが優先）
+    var typed = o.cells || {};
+    Object.keys(typed).forEach(function (key) {
+      var p = key.split(","), r = +p[0], c = +p[1];
+      var addr = XLSX.utils.encode_cell({ r: r, c: c });
+      if (ws[addr]) return;
+      var cell = typed[key], nc;
+      if (cell.t === "f") nc = { t: "n", f: cell.v.slice(1) };
+      else if (cell.t === "d") nc = { t: "n", v: dateToSerial(cell.v), z: cell.z || "yyyy/m/d" };
+      else if (cell.t === "n") nc = { t: "n", v: cell.v };
+      else nc = { t: "s", v: String(cell.v) };
+      if (cell.z && cell.t !== "d") nc.z = cell.z;
+      ws[addr] = nc;
+      if (r > maxR) maxR = r;
+      if (c > maxC) maxC = c;
     });
 
     ws["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxR, c: maxC } });
@@ -3862,8 +4307,8 @@ document.addEventListener("keydown", function (e) {
     if (S.dsel) {
       var n = deleteBlocksInSel();
       e.preventDefault();
-      toast(n ? "ブロック " + n + " 件を外しました（Ctrl+Zで戻せます）"
-        : "選んだ範囲にブロックはありません", n ? undefined : "wa");
+      toast(n ? n + " 件を消しました（Ctrl+Zで戻せます）"
+        : "選んだ範囲にブロックや入力はありません", n ? undefined : "wa");
     } else if (S.selBlock) {
       e.preventDefault();
       removeBlock(S.selBlock);
@@ -3937,9 +4382,9 @@ function pythonFromBlocks(outName, sheetNames) {
   var stamp = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
     + "-" + String(d.getDate()).padStart(2, "0");
   var keepF = $("optFormula").checked, keepM = $("optMerge").checked;
-  var taken = {}, takenOut = {}, plan = [], used = {}, sheets = [];
+  var taken = {}, takenOut = {}, plan = [], used = {}, sheets = [], edits = [];
   S.out.forEach(function (o, oi) {
-    if (!o.blocks.length) return;
+    if (!o.blocks.length && !hasCells(o)) return;
     var nm = safeSheetName(o.name, taken);                     // PLAN の中での目印
     var want = ((sheetNames && sheetNames[oi]) || "").trim();
     sheets.push("    " + pyStr(nm) + ": " + pyStr(safeSheetName(want || o.name, takenOut)) + ",");
@@ -3952,6 +4397,18 @@ function pythonFromBlocks(outName, sheetNames) {
       plan.push('    {"out": ' + pyStr(nm) + ', "file": ' + pyStr(fname)
         + ', "sheet": ' + pyStr(sh.name) + ', "src": ' + pyStr(rangeLabel(b))
         + ', "at": ' + pyStr(a1(b.dr, b.dc)) + ', "transpose": ' + (b.trans ? "True" : "False") + "},");
+    });
+    // 直接入力したセル（値・数式・日付）。行 → 列の順で並べて読みやすく
+    var cells = o.cells || {};
+    Object.keys(cells).map(function (key) {
+      var p = key.split(",");
+      return { r: +p[0], c: +p[1], cell: cells[key] };
+    }).sort(function (a, b) { return a.r - b.r || a.c - b.c; }).forEach(function (e2) {
+      var cell = e2.cell;
+      var v = cell.t === "n" ? String(cell.v) : pyStr(cell.v);
+      var z = cell.z ? pyStr(cell.z) : (cell.t === "d" ? pyStr("yyyy/m/d") : "None");
+      edits.push('    {"out": ' + pyStr(nm) + ', "at": ' + pyStr(a1(e2.r, e2.c))
+        + ', "kind": ' + pyStr(cell.t) + ', "value": ' + v + ', "format": ' + z + "},");
     });
   });
   var names = Object.keys(used);
@@ -3979,6 +4436,7 @@ function pythonFromBlocks(outName, sheetNames) {
     '"""',
     "from __future__ import annotations",
     "",
+    "import datetime",
     "import difflib",
     "import io",
     "import os",
@@ -4010,6 +4468,11 @@ function pythonFromBlocks(outName, sheetNames) {
     "# out=出力シート名 / file,sheet,src=元データ / at=置き場所 / transpose=行列の入れ替え",
     "PLAN = [",
     plan.join("\n"),
+    "]",
+    "",
+    "# 画面で直接入力したセル。kind は n=数値 / d=日付 / s=文字 / f=数式",
+    "EDITS = [",
+    edits.join("\n"),
     "]",
     "",
     PY_RUNNER
@@ -4238,6 +4701,18 @@ var PY_RUNNER = [
   "                    dst.merge_cells(",
   "                        start_row=mg.min_row - r1 + dr0, start_column=mg.min_col - c1 + dc0,",
   "                        end_row=mg.max_row - r1 + dr0, end_column=mg.max_col - c1 + dc0)",
+  "",
+  "    # 画面で直接入力したセル（ブロックの下になったところはブロックが優先）",
+  "    for ed in EDITS:",
+  "        ws = out[sheets.get(ed[\"out\"], ed[\"out\"])]",
+  "        if ws[ed[\"at\"]].value is not None:",
+  "            continue",
+  "        value = ed[\"value\"]",
+  "        if ed[\"kind\"] == \"d\":",
+  "            value = datetime.date.fromisoformat(value)",
+  "        ws[ed[\"at\"]] = value                     # 「=」で始まる文字は数式として入る",
+  "        if ed[\"format\"]:",
+  "            ws[ed[\"at\"]].number_format = ed[\"format\"]",
   "",
   "    if not out.sheetnames:",
   "        raise RuntimeError(\"PLAN が空です。画面で範囲を出力シートへ置いてから書き出してください\")",
