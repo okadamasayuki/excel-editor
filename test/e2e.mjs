@@ -811,7 +811,7 @@ check("配置が手順として並ぶ",
   String((pySrc.match(/^\s+\{"out": .*"file":/gm) || []).length));
 check("転置も引き継がれる", /"transpose": True/.test(pySrc));
 const pyImports = [...pySrc.matchAll(/^(?:import|from) ([\w.]+)/gm)].map((m) => m[1]);
-const pyStd = ["__future__", "datetime", "difflib", "io", "os", "re", "tempfile", "unicodedata"];
+const pyStd = ["__future__", "csv", "datetime", "difflib", "io", "os", "re", "tempfile", "unicodedata"];
 check("外から入れるのは openpyxl だけ",
   pyImports.includes("openpyxl")
   && pyImports.every((m) => m === "openpyxl" || m.startsWith("openpyxl.") || pyStd.includes(m)),
@@ -1017,6 +1017,47 @@ if (!pyReady) {
   catch (e) { ranB = "ERROR " + (e.stderr || e.message); }
   check("xlsx でないファイルは、理由を言って止まる（英語の zip エラーを出さない）",
     /xlsx として読めません/.test(ranB) && !/BadZipFile|not a zip/i.test(ranB), ranB.trim().slice(0, 160));
+
+  // ノートブックの他のセルが from datetime import datetime していても壊れないこと
+  // （Snowflake は全セルがひとつの名前空間なので、datetime がクラスに上書きされる）
+  writeFileSync(join(pyDir, "collide.py"), [
+    "from datetime import datetime          # ほかのセルの import を再現",
+    'src = open("extract.py", encoding="utf-8").read()',
+    'exec(compile(src, "extract.py", "exec"), globals())',
+    'print("COLLIDE", build(output="collide.xlsx"))',
+  ].join("\n"));
+  let ranC = "";
+  try { ranC = execFileSync("python3", ["collide.py"], { cwd: pyDir, encoding: "utf8" }); }
+  catch (e) { ranC = "ERROR " + (e.stderr || e.message); }
+  check("from datetime import datetime と同居しても日付が書ける",
+    /COLLIDE collide\.xlsx/.test(ranC) && !/AttributeError/.test(ranC), ranC.trim().slice(-160));
+
+  // CSV の元データも、そのまま読めること（UTF-8 / Shift_JIS、数値、年つき日付）
+  writeFileSync(join(pyDir, "csvcheck.py"), [
+    "import extract, openpyxl, os",
+    'open("月次utf8.csv", "w", encoding="utf-8").write("日付,支店,金額\\n2026-08-01,東京,32000\\n")',
+    'open("月次sjis.csv", "w", encoding="cp932").write("日付,支店,金額\\n2026-08-02,大阪,18500\\n")',
+    'ws = extract._open("月次utf8.csv", False)["Sheet1"]',
+    'print("U", ws["A2"].value, ws["A2"].number_format, ws["C2"].value)',
+    'ws2 = extract._open("月次sjis.csv", False)["Sheet1"]',
+    'print("S", ws2["B2"].value, ws2["C2"].value)',
+    "# CSV を元データにして、そのまま build できること（シート名は Sheet1 でなくても許す）",
+    'extract.SOURCES[:] = ["月次utf8.csv"]',
+    'extract.PLAN[:] = [{"out": "まとめ", "file": "月次utf8.csv", "sheet": "月次", "src": "A1:C2", "at": "A1", "transpose": False}]',
+    "extract.SHEETS.clear(); extract.SHEETS[\"まとめ\"] = \"まとめ\"",
+    "extract.EDITS[:] = []",
+    'p = extract.build(output="csv-out.xlsx")',
+    'out = openpyxl.load_workbook(p)["まとめ"]',
+    'print("OUT", out["A2"].value, out["A2"].number_format, out["C2"].value)',
+  ].join("\n"));
+  let ranCsv = "";
+  try { ranCsv = execFileSync("python3", ["csvcheck.py"], { cwd: pyDir, encoding: "utf8" }); }
+  catch (e) { ranCsv = "ERROR " + (e.stderr || e.message); }
+  check("CSV を読める（年つき日付は日付・数字は数値になる）",
+    /U 2026-08-01 yyyy\/m\/d 32000/.test(ranCsv), ranCsv.trim().slice(0, 160));
+  check("Shift_JIS の CSV も読める", /S 大阪 18500/.test(ranCsv), ranCsv.trim().slice(0, 160));
+  check("CSV を元データにして書き出せる", /OUT 2026-08-01 00:00:00 yyyy\/m\/d 32000/.test(ranCsv),
+    ranCsv.trim().slice(-160));
 
   // 保存できない場所を指されても、逃がして書き出せること
   const drv = [

@@ -148,6 +148,11 @@ frames = to_dataframes()      # 続きの加工をするなら {シート名: Da
 zip の組み立て・取り出しはメモリの上だけで行う。ファイルに対して `seek` も `tell` も呼ばず、
 組み込みの `open()` も使わない（テストで毎回確認している）。
 
+**CSV も読める。** 元データが `.csv` のときは、そのまま読み込む（UTF-8 / Shift_JIS を
+自動判別、数字は数値、`2026-08-01` のような年つきの日付は日付になる）。ノートブックの
+他のセルが `from datetime import datetime` をしていても衝突しないよう、生成コードは
+`import datetime as _dt` を使う（Snowflake は全セルがひとつの名前空間のため）。
+
 **出力ファイルは無くてよい。** `build()` は毎回まっさらに作り直す（残っていれば上書き）。
 前回の実行で壊れた出力が残っていても、**自分の出力（OUTPUT と同じ名前）と zip 形式でない
 ファイルは入力の候補から外す**ので、取り違えて `File is not a zip file` になることはない。
@@ -201,7 +206,7 @@ test/fixtures/    色・非表示・列幅つきの検証用ブック（openpyxl
 
 ```sh
 node build.mjs     # docs/index.html と dist/index.html を生成
-node test/e2e.mjs  # ブラウザで通しテスト（408項目）＋ スクリーンショット
+node test/e2e.mjs  # ブラウザで通しテスト（412項目）＋ スクリーンショット
 ```
 
 テストは生成された `.xlsx` を SheetJS で読み直し、値・型・配置先セルまで照合する。
