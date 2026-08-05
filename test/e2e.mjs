@@ -1243,11 +1243,19 @@ await page.click("#dstTabsHost .tab >> nth=0");
 // ---- 8. スクリーンショット ---------------------------------------------
 mkdirSync(join(root, "test/shots"), { recursive: true });
 await page.screenshot({ path: join(root, "test/shots/light.png") });
-const hueLight = await page.$eval("#dstGrid .blockbox", (n) => n.style.getPropertyValue("--bc"));
+const hueLight = await page.$eval("#dstGrid .blockbox", (n) => getComputedStyle(n).borderTopColor);
 await page.emulateMedia({ colorScheme: "dark" });
 await page.waitForTimeout(250);
-const hueDark = await page.$eval("#dstGrid .blockbox", (n) => n.style.getPropertyValue("--bc"));
-check("ブロック色がテーマに追随する", hueLight !== hueDark, `${hueLight} → ${hueDark}`);
+const hueDark = await page.$eval("#dstGrid .blockbox", (n) => getComputedStyle(n).borderTopColor);
+check("ブロック枠の色がテーマに追随する", hueLight !== hueDark, `${hueLight} → ${hueDark}`);
+check("置いたあとの枠も選択と同じ色", await page.evaluate(() => {
+  const b = getComputedStyle(document.querySelector("#dstGrid .blockbox")).borderTopColor;
+  const doc = getComputedStyle(document.documentElement).getPropertyValue("--src").trim();
+  const probe = document.createElement("div");
+  probe.style.color = doc; document.body.appendChild(probe);
+  const want = getComputedStyle(probe).color; probe.remove();
+  return b === want;
+}));
 await page.screenshot({ path: join(root, "test/shots/dark.png") });
 await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
 await page.waitForTimeout(200);

@@ -1202,7 +1202,10 @@ function isDark() {
 }
 /** 色は番号で持ち、描画時にテーマへ解決する（作成時に固定するとテーマ切替で浮く） */
 function hueOf(i) { return (isDark() ? BLOCK_HUES_D : BLOCK_HUES)[i % BLOCK_HUES.length]; }
-function blockColor(b) { return hueOf(b.hueIdx || 0); }
+function blockColor(b) {
+  // ドラッグ中も置いたあとも、選択と同じ色でそろえる（段階ごとに色を変えない）
+  return "var(--src)";
+}
 
 function colName(c) {
   var s = "";
@@ -1932,7 +1935,7 @@ function renderSrcOverlay() {
       // 選択した範囲は、どこを掴んでも出力側へ運べる（Excel と同じ感覚）
       var startDrag = function (e) {
         dragPayload = { kind: "range", sheet: S.active, r1: it.g.r1, c1: it.g.c1, r2: it.g.r2, c2: it.g.c2 };
-        e.dataTransfer.effectAllowed = "copy";
+        e.dataTransfer.effectAllowed = "move";
       hideDragImage(e);
         e.dataTransfer.setData("text/plain", rangeLabel(it.g));
         pendingCollapse = null;
@@ -2173,7 +2176,7 @@ function renderSheetList() {
     b.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); switchSheet(i); } });
     b.addEventListener("dragstart", function (e) {
       dragPayload = { kind: "sheet", sheet: i };
-      e.dataTransfer.effectAllowed = "copy";
+      e.dataTransfer.effectAllowed = "move";
       hideDragImage(e);
       e.dataTransfer.setData("text/plain", sh.name);
     });
@@ -2230,7 +2233,7 @@ function renderSrcTabs() {
     t.addEventListener("click", function () { switchSheet(i); });
     t.addEventListener("dragstart", function (e) {
       dragPayload = { kind: "sheet", sheet: i };
-      e.dataTransfer.effectAllowed = "copy";
+      e.dataTransfer.effectAllowed = "move";
       hideDragImage(e);
       e.dataTransfer.setData("text/plain", sh.name);
     });
@@ -2858,7 +2861,7 @@ function clearGhost() {
   wrap.addEventListener("dragover", function (e) {
     if (!dragPayload) return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = dragPayload.kind === "move" ? "move" : "copy";
+    e.dataTransfer.dropEffect = "move";
     wrap.classList.add("dragover");
     dstScroller.move(e.clientX, e.clientY);
     var hit = dstGrid.cellAt(e.clientX, e.clientY, true);
