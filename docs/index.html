@@ -4355,6 +4355,25 @@ function contentBounds(o, rows) {
   return { maxR: maxR, maxC: maxC, minC: minC === Infinity ? 0 : minC };
 }
 
+/** その行（帯）で、左端から連続して値が入っている最後の列。何も無ければ -1 */
+function rowRunEnd(o, r0, r1) {
+  var cont = outContent(o), cols = {};
+  Object.keys(cont.map).forEach(function (k) {
+    var hit = cont.map[k];
+    if (!hit || !hit.cell || hit.cell.v == null || hit.cell.v === "") return;
+    var p = k.split(",");
+    if (+p[0] < r0 || +p[0] > r1) return;
+    cols[+p[1]] = 1;
+  });
+  var list = Object.keys(cols).map(Number).sort(function (a, b) { return a - b; });
+  if (!list.length) return -1;
+  var end = list[0];
+  for (var i = 1; i < list.length; i++) {
+    if (list[i] === end + 1) end = list[i]; else break;
+  }
+  return end;
+}
+
 function appendAnchor(o, dir) {
   if (!o || (!o.blocks.length && !hasCells(o))) return { r: 0, c: 0 };
   if (dir === "right") {
@@ -4371,9 +4390,10 @@ function appendAnchor(o, dir) {
       }
     }
     if (r0 == null) { var a2 = contentBounds(o); r0 = r1 = Math.max(a2.maxR, 0); }
-    // その行に実際に入っている値（ブロックでも直接入力でも）の右隣へ
-    var band = contentBounds(o, { r0: r0, r1: r1 });
-    return { r: r0, c: band.maxC >= 0 ? band.maxC + 1 : fallbackC };
+    // その行で「値が連続して入っていて、途切れるところ」の右隣へ。
+    // 離れた場所にぽつんと値があっても、そこまでは飛ばない
+    var end = rowRunEnd(o, r0, r1);
+    return { r: r0, c: end >= 0 ? end + 1 : fallbackC };
   }
   var all = contentBounds(o);
   return {
@@ -4537,6 +4557,8 @@ function pythonFromBlocks(outName, sheetNames) {
     "外から入れるものは openpyxl だけです（Snowflake のノートブックでもそのまま動きます）。",
     "",
     "  - 元ファイルは、このノートブックと同じ場所に置いてください",
+    "  - 書き出す先のファイルは無くてかまいません（毎回まっさらに作り直します。",
+    "    前回の出力が残っていても、入力と取り違えません）",
     "  - 名前は多少ちがっても大丈夫です",
     "    （08.03更新_2026年度◯◯表 → 02.17更新_2026年度◯◯表 のような日付のちがい、",
     "      前後の入れ替わり、全角半角のちがいなどは吸収します）",
@@ -4653,16 +4675,36 @@ var PY_RUNNER = [
   "    return round(0.6 * difflib.SequenceMatcher(None, ja, jb).ratio(), 4)",
   "",
   "",
+  "def _looks_like_xlsx(path: str) -> bool:",
+  "    \"\"\"xlsx は zip なので、先頭が PK で始まる。壊れたファイルを候補から外す。\"\"\"",
+  "    try:",
+  "        fd = os.open(path, os.O_RDONLY | _BINARY)",
+  "    except OSError:",
+  "        return False",
+  "    try:",
+  "        head = os.read(fd, 4)",
+  "    finally:",
+  "        os.close(fd)",
+  "    return head[:2] == b\"PK\"",
+  "",
+  "",
   "def find_source(name: str, search_dirs=None) -> str:",
   "    \"\"\"SOURCES に書いた名前から、実際のファイルを探し当てる。",
   "",
   "    同じ名前があればそれを使い、無ければ「いちばん近い名前」を選ぶ。",
   "    近さが同じなら、年度など数字のそろうほう → 更新の新しいほう、の順に決める。",
+  "    このプログラム自身の出力（OUTPUT と同じ名前）と、zip 形式でない",
+  "    壊れたファイルは、入力の候補にしない。",
   "    \"\"\"",
   "    folders = list(SEARCH_DIRS if search_dirs is None else search_dirs)",
+  "    out_base = os.path.basename(OUTPUT)",
   "    for folder in folders:",
   "        exact = os.path.join(folder, name)",
   "        if os.path.isfile(exact):",
+  "            if not _looks_like_xlsx(exact):",
+  "                raise ValueError(",
+  "                    f\"{exact} は xlsx として読めません（中身が zip 形式ではありません）。\"",
+  "                    f\"Excel で開いて .xlsx として保存し直してください\")",
   "            return exact",
   "",
   "    found = []",
@@ -4676,6 +4718,10 @@ var PY_RUNNER = [
   "            if entry.startswith(\"~$\") or not os.path.isfile(path):",
   "                continue",
   "            if os.path.splitext(entry)[1].lower() not in _EXCEL_EXT:",
+  "                continue",
+  "            if entry == out_base:                # 前回の出力を入力と取り違えない",
+  "                continue",
+  "            if not _looks_like_xlsx(path):       # 壊れたファイルは拾わない",
   "                continue",
   "            try:",
   "                when = os.path.getmtime(path)",
@@ -4753,8 +4799,12 @@ var PY_RUNNER = [
   "    xlsx は zip なので、開くには位置の移動が要る。ファイルからは頭から読み切って、",
   "    移動はメモリの上でだけ行う。",
   "    \"\"\"",
-  "    return openpyxl.load_workbook(io.BytesIO(read_bytes(path)),",
-  "                                  data_only=not keep_formulas)",
+  "    data = read_bytes(path)",
+  "    if data[:2] != b\"PK\":",
+  "        raise ValueError(",
+  "            f\"{path} は xlsx として読めません（中身が zip 形式ではありません）。\"",
+  "            f\"Excel で開いて .xlsx として保存し直してください\")",
+  "    return openpyxl.load_workbook(io.BytesIO(data), data_only=not keep_formulas)",
   "",
   "",
   "def _assemble(sources=None, keep_formulas=None, keep_merges=None, search_dirs=None,",
@@ -4856,8 +4906,10 @@ var PY_RUNNER = [
   "          search_dirs=None, sheets=None) -> str:",
   "    \"\"\"PLAN のとおりに抜き出して保存し、実際に書けた場所を返す。",
   "",
-  "    保存できないフォルダ（読み取り専用のマウントなど）だったときは、",
-  "    止まらずに作業用フォルダへ逃がして、その場所を知らせる。",
+  "    書き出す先のファイルは無くてかまわない（毎回まっさらに作り直し、",
+  "    残っていれば上書きする）。保存できないフォルダ（読み取り専用の",
+  "    マウントなど）だったときは、止まらずに作業用フォルダへ逃がして、",
+  "    その場所を知らせる。",
   "    \"\"\"",
   "    output = OUTPUT if output is None else output",
   "    data = build_bytes(sources, keep_formulas, keep_merges, search_dirs, sheets)",

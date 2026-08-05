@@ -577,11 +577,22 @@ check("日付が1日ずつ増える", await page.evaluate(() => {
     .every((d, i) => cs["7," + (i + 1)] && cs["7," + (i + 1)].v === d);
 }), JSON.stringify(await typedCells()));
 
-// 「末尾の右へ移動」は、フィルした行（直接入力の行）の右端を見る
+// 「末尾の右へ移動」は、フィルした行の「連続した値が途切れるところ」を見る
 await page.click("#btnAppendRight");
 check("末尾の右へ移動が、フィルした行の右端に来る",
   (await page.evaluate(() => window.__app.S.lastGoto)) === "F8",
   await page.evaluate(() => window.__app.S.lastGoto));
+// 同じ行の遠くにぽつんと値があっても、連続が途切れたところで止まる
+await page.evaluate(() => {
+  const A = window.__app;
+  A.S.out[A.S.activeOut].cells["7,20"] = { t: "s", v: "メモ", z: null };
+  A.S.lastPutKind = "cell"; A.S.lastCellRow = 7;
+});
+await page.click("#btnAppendRight");
+check("離れた値までは飛ばず、連続の切れ目で止まる",
+  (await page.evaluate(() => window.__app.S.lastGoto)) === "F8",
+  await page.evaluate(() => window.__app.S.lastGoto));
+await page.evaluate(() => { delete window.__app.S.out[window.__app.S.activeOut].cells["7,20"]; });
 await page.evaluate(() => {
   const w = document.getElementById("dstGrid");
   w.scrollTop = 0; w.scrollLeft = 0;
@@ -954,12 +965,13 @@ if (!pyReady) {
   mkdirSync(nendo, { recursive: true });
   mkdirSync(hoka, { recursive: true });
   const age = (p, sec) => { const t = Date.now() / 1000 - sec; utimesSync(p, t, t); };
+  const realXlsx = readFileSync(join(pyDir, "by-ui.xlsx"));
   // 年度のそろうほうは古く、年度ちがいは新しくしておく（数字が決め手になるか見る）
   for (const [n, sec] of [["02.17更新_2026年度費別管理表.xlsx", 99999],
     ["01.23更新_2025年度費別管理表.xlsx", 0]]) {
-    writeFileSync(join(nendo, n), "x"); age(join(nendo, n), sec);
+    writeFileSync(join(nendo, n), realXlsx); age(join(nendo, n), sec);
   }
-  writeFileSync(join(hoka, "02.17更新_2026年度部門別管理表.xlsx"), "x");
+  writeFileSync(join(hoka, "02.17更新_2026年度部門別管理表.xlsx"), realXlsx);
   writeFileSync(join(pyDir, "nendo.py"), [
     "import extract, os",
     'want = "08.03更新_2026年度費別管理表.xlsx"',
@@ -978,6 +990,33 @@ if (!pyReady) {
   check("年度がちがうほうは選ばない（新しくても）",
     !/PICK .*2025年度/.test(ranN), ranN.trim().slice(0, 160));
   check("似た名前でも別の表は読まない", /OTHER 読まなかった/.test(ranN), ranN.trim().slice(0, 160));
+
+  // 前回の出力や壊れたファイルが残っていても、入力と取り違えないこと
+  const zombie = join(pyDir, "ゾンビ");
+  mkdirSync(zombie, { recursive: true });
+  writeFileSync(join(zombie, "extract.py"), pySrc.replace('OUTPUT = "by-python.xlsx"', 'OUTPUT = "サンプル売上_抜粋.xlsx"'));
+  writeFileSync(join(zombie, "サンプル売上_抜粋.xlsx"), "これは前回の実行で壊れた出力ファイル");
+  writeFileSync(join(zombie, "0804更新_サンプル売上.xlsx"), readFileSync(uiPath));
+  let ranZ = "";
+  try { ranZ = execFileSync("python3", ["extract.py"], { cwd: zombie, encoding: "utf8" }); }
+  catch (e) { ranZ = "ERROR " + (e.stderr || e.message); }
+  check("壊れた前回の出力が残っていても、入力と取り違えない",
+    /書き出しました/.test(ranZ) && /0804更新_サンプル売上/.test(ranZ), ranZ.trim().slice(0, 160));
+  check("上書きで作り直せる（zip として読める出力になる）", (() => {
+    try { return XLSX.read(readFileSync(join(zombie, "サンプル売上_抜粋.xlsx")), { type: "buffer" }).SheetNames.length > 0; }
+    catch (e) { return false; }
+  })(), "");
+
+  // 入力そのものが xlsx でないときは、理由を日本語で言って止まる
+  const broken = join(pyDir, "こわれた入力");
+  mkdirSync(broken, { recursive: true });
+  writeFileSync(join(broken, "extract.py"), pySrc);
+  writeFileSync(join(broken, "サンプル売上.xlsx"), "<html>xlsxのふりをしたHTML</html>");
+  let ranB = "";
+  try { ranB = execFileSync("python3", ["extract.py"], { cwd: broken, encoding: "utf8" }); }
+  catch (e) { ranB = "ERROR " + (e.stderr || e.message); }
+  check("xlsx でないファイルは、理由を言って止まる（英語の zip エラーを出さない）",
+    /xlsx として読めません/.test(ranB) && !/BadZipFile|not a zip/i.test(ranB), ranB.trim().slice(0, 160));
 
   // 保存できない場所を指されても、逃がして書き出せること
   const drv = [
