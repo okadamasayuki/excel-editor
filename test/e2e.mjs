@@ -690,6 +690,37 @@ check("Delete で直接入力も消せる", await page.evaluate(() => {
   return !cs["5,0"] && !cs["5,1"];
 }), JSON.stringify(await typedCells()));
 
+// 直接入力も手順書に反映される（今の配置から作る → 実行し直すと同じ状態に戻る）
+await page.evaluate(() => window.__app.openScript(true));
+await page.evaluate(() => { document.getElementById("scText").value = ""; });
+await page.click("#scFromBlocks");
+const scGen = await page.inputValue("#scText");
+check("手順書に「…と書く」の行が入る",
+  /入力のA8に「2026\/8\/1」と書く/.test(scGen),
+  scGen.split("\n").filter((l) => l.includes("書く")).slice(0, 3).join(" / "));
+check("数式もそのまま手順書へ", /入力のA15に「=E2\*2」と書く/.test(scGen),
+  scGen.split("\n").filter((l) => l.includes("=")).join(" / "));
+check("読み直せない書式は注記として付く",
+  /入力のA18に「0\.085」と書く（書式: 0\.0%）/.test(scGen),
+  scGen.split("\n").filter((l) => l.includes("書式")).join(" / "));
+const cellsBefore = await page.evaluate(() => {
+  const cs = window.__app.S.out[window.__app.S.activeOut].cells || {};
+  return JSON.stringify(Object.keys(cs).sort().map((k) => [k, cs[k]]));
+});
+await page.evaluate((txt) => {
+  const A = window.__app;
+  A.S.out = []; A.S.selBlock = null;
+  A.runScript(txt, true);
+}, scGen);
+await page.waitForTimeout(250);
+const cellsAfter = await page.evaluate(() => {
+  const cs = window.__app.S.out[window.__app.S.activeOut].cells || {};
+  return JSON.stringify(Object.keys(cs).sort().map((k) => [k, cs[k]]));
+});
+check("手順書を実行し直すと、直接入力が同じ値・書式で戻る", cellsBefore === cellsAfter,
+  cellsAfter.slice(0, 160));
+await page.evaluate(() => window.__app.openScript(false));
+
 // ---- 7c. Python への書き出し（同じ処理を Snowflake などで動かす） --------
 // 画面が書き出す xlsx と、書き出した Python が作る xlsx が一致することまで見る
 await loadSampleAgain();
@@ -1135,7 +1166,7 @@ check("「書き方の一覧」で開く", await page.isVisible("#scCheat"));
 check("ボタンの文言が閉じる側になる", (await page.textContent("#scHelp")) === "一覧を閉じる");
 const cheatHeads = await page.$$eval(".cheat h4", (ns) => ns.map((n) => n.textContent));
 check("種類ごとに分かれている",
-  cheatHeads.join(",") === "置く,範囲の書き方,名前をつけて、その隣に置く,繰り返し,シートとファイル,その他",
+  cheatHeads.join(",") === "置く,範囲の書き方,名前をつけて、その隣に置く,書き込む,繰り返し,シートとファイル,その他",
   cheatHeads.join(","));
 check("ひととおりの書き方が並ぶ",
   (await page.locator(".cheat-row").count()) >= 25,
@@ -1212,16 +1243,23 @@ const cheatRuns = await page.evaluate(() => {
     "支店別サマリのA1:B4を 目印 の右に置く",
     "商品マスタのA1:C3を 目印 の下に置く",
     "商品マスタのA1:C3を 目印 の下に1行あけて置く",
+    "検証のB20に「合計」と書く",
+    "検証のB21に「=SUM(B1:B2)」と書く",
+    "検証のB22に「0.085」と書く（書式: 0.0%）",
     "繰り返し 行 = 10-12 / 1列あけて横に並べる",
     "  売上明細の{行}行目を続けて置く",
     "ここまで",
   ].join("\n");
   A.S.out = []; A.S.selBlock = null;
   const r = A.runScript(script, true);
-  return { applied: r.applied, errors: r.errors.map((e) => e.n + "行目:" + e.msg) };
+  const cs = A.S.out[0].cells || {};
+  return { applied: r.applied, errors: r.errors.map((e) => e.n + "行目:" + e.msg),
+    written: [cs["19,1"] && cs["19,1"].v, cs["20,1"] && cs["20,1"].t, cs["21,1"] && cs["21,1"].z] };
 });
 check("一覧に載せた書き方が実際に動く", cheatRuns.errors.length === 0, cheatRuns.errors.join(" / "));
-check("すべての行が置かれる", cheatRuns.applied === 16, String(cheatRuns.applied));
+check("すべての行が置かれる", cheatRuns.applied === 19, String(cheatRuns.applied));
+check("「…と書く」も一覧のとおり動く",
+  cheatRuns.written.join(",") === "合計,f,0.0%", cheatRuns.written.join(","));
 
 // 矢印の書き方も動く
 const arrowRun = await placedByEarly("シート追加 矢印\n売上明細のA1:D10 → 矢印のB2");

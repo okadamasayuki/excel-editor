@@ -2282,6 +2282,12 @@ function viewCell(cell) {
   if (cell.t === "n") return { t: "n", v: cell.v, w: fmtTypedNum(cell.v, cell.z), ed: 1 };
   return { t: "s", v: cell.v, w: String(cell.v), ed: 1 };
 }
+/** 書式を変えるとき、日付⇄数値の意味も一緒にそろえる */
+function applyCellFormat(cell, z) {
+  cell.z = z;
+  if (cell.t === "d" && z && z.indexOf("d") < 0 && z !== "@") { cell.t = "n"; cell.v = dateToSerial(cell.v); }
+  else if (cell.t === "n" && (z === "yyyy/m/d" || z === "m/d")) { cell.t = "d"; cell.v = serialToIso(Math.round(cell.v)); }
+}
 function fmtTypedNum(v, z) {
   if (z === "#,##0" || z === "¥#,##0") {
     var s = Math.round(v).toLocaleString("ja-JP");
@@ -3150,13 +3156,7 @@ $("cellFmt").addEventListener("change", function () {
   }
   if (!maybe.length) { toast("選んだ範囲に、直接入力したセルがありません（書式はブロックには効きません）", "wa"); return; }
   snapshot();
-  maybe.forEach(function (cell) {
-    cell.z = z;
-    // 日付書式を数値に・数値書式を日付に掛けたときは、意味も一緒に変える
-    if (cell.t === "d" && z && z.indexOf("d") < 0 && z !== "@") { cell.t = "n"; cell.v = dateToSerial(cell.v); }
-    else if (cell.t === "n" && (z === "yyyy/m/d" || z === "m/d")) { cell.t = "d"; cell.v = serialToIso(Math.round(cell.v)); }
-    n++;
-  });
+  maybe.forEach(function (cell) { applyCellFormat(cell, z); n++; });
   renderOut();
   toast(n + " セルの書式を「" + ($("cellFmt").selectedOptions[0].textContent) + "」にしました");
 });
@@ -3391,6 +3391,28 @@ function execLine(raw, ctx) {
     var os = useOrAddOutSheet(m[1].trim());
     ctx.last = null;
     return { ok: true, msg: "出力シート「" + os.name + "」" };
+  }
+
+  // 「まとめのB2に「合計」と書く」＝出力シートのセルに直接書き込む（数式・日付もそのまま）
+  var wfm = /[（(]\s*書式\s*[:：]\s*([^）)]+?)\s*[）)]\s*$/.exec(t);
+  var wt = wfm ? t.slice(0, wfm.index).trim() : t;
+  var wm = /^(?:(.+?)の)?([A-Za-z]{1,3}\d{1,7})\s*に\s*[「『]([\s\S]*)[」』]\s*と\s*(?:書く|書き込む|入れる|入力する?)$/.exec(wt);
+  if (wm) {
+    var wo = wm[1] ? useOrAddOutSheet(wm[1].trim())
+      : (ctx.last && ctx.last.out) || activeOut() || addOutSheet("抜粋1", true);
+    var wat = parseCell(wm[2]);
+    if (!wat) return { err: "セル位置を読み取れません" };
+    if (ctx.band && ctx.band.off) wat = { r: wat.r + ctx.band.off.r, c: wat.c + ctx.band.off.c };
+    var wkey = wat.r + "," + wat.c;
+    var wcell = parseCellInput(wm[3]);
+    if (!wcell) {
+      delete outCells(wo)[wkey];
+      return { ok: true, msg: wo.name + "!" + a1(wat.r, wat.c) + " を空にする" };
+    }
+    if (wfm) applyCellFormat(wcell, wfm[1].trim() === "標準" ? null : wfm[1].trim());
+    outCells(wo)[wkey] = wcell;
+    S.activeOut = S.out.indexOf(wo);
+    return { ok: true, msg: wo.name + "!" + a1(wat.r, wat.c) + " に「" + wm[3] + "」" };
   }
   if (!S.sheets.length) return { err: "先にExcelファイルを読み込んでください" };
 
@@ -3690,7 +3712,8 @@ function scriptFromBlocks() {
   L.push("");
   var any = false;
   S.out.forEach(function (o) {
-    if (!o.blocks.length) return;
+    var cellKeys = Object.keys(o.cells || {});
+    if (!o.blocks.length && !cellKeys.length) return;
     any = true;
     L.push("シート追加 " + o.name);
     o.blocks.forEach(function (b) {
@@ -3698,6 +3721,20 @@ function scriptFromBlocks() {
       var nm = sheetNameIsAmbiguous(b.sheet) ? sheetFullName(b.sheet) : S.sheets[b.sheet].name;
       L.push(nm + "の" + rangeLabel(b) + "を" + o.name + "の" + a1(b.dr, b.dc) + "に置く"
         + (b.trans ? "（転置）" : ""));
+    });
+    // 直接入力したセル。読み直すと同じ値・書式に戻る
+    cellKeys.map(function (key) {
+      var p = key.split(",");
+      return { r: +p[0], c: +p[1], cell: o.cells[key] };
+    }).sort(function (a, b) { return a.r - b.r || a.c - b.c; }).forEach(function (e) {
+      var txt = cellToText(e.cell);
+      var line = o.name + "の" + a1(e.r, e.c) + "に「" + txt + "」と書く";
+      var rt = parseCellInput(txt);
+      // 文字どおりに読み直して同じ書式にならないときだけ、書式を書き添える
+      if (!rt || rt.t !== e.cell.t || (rt.z || null) !== (e.cell.z || null)) {
+        line += "（書式: " + (e.cell.z || "標準") + "）";
+      }
+      L.push(line);
     });
     L.push("");
   });
@@ -4863,6 +4900,14 @@ var CHEAT = [
       demo: D("out", [[0, 0, 3, 3, "見出し", 0], [3, 0, 2, 3, "下", 2]], "左をそろえて、すぐ下へ") },
     { ex: "商品マスタのA1:C3を 見出し の下に1行あけて置く", ds: "すきまを空ける（2列あけて、なども）",
       demo: D("out", [[0, 0, 3, 3, "見出し", 0], [4, 0, 2, 3, "下", 2]], "1 行ぶん空けて置かれます") }
+  ]],
+  ["書き込む", [
+    { ex: "まとめのB2に「合計」と書く", ds: "出力シートのセルに直接書き込む。ブロックとは別に値が入る",
+      demo: D("out", [[1, 1, 1, 2, "合計", 0]], "セルにそのまま入ります。画面の直接入力と同じです") },
+    { ex: "まとめのB3に「=SUM(B1:B2)」と書く", ds: "数式や日付（2026/8/1）もそのまま書ける",
+      demo: D("out", [[2, 1, 1, 3, "=SUM(B1:B2)", 1]], "Excel で開いたときに計算されます") },
+    { ex: "まとめのB4に「0.085」と書く（書式: 0.0%）", ds: "書式も指定できる（0.0% / #,##0 / yyyy/m/d / 標準 など）",
+      demo: D("out", [[3, 1, 1, 2, "8.5%", 2]], "書式どおりの見た目で書き出されます") }
   ]],
   ["繰り返し", [
     { ex: "繰り返し 行 = 10, 12, 17, 20", ds: "値の数だけ繰り返す。次の行から「ここまで」まで",
