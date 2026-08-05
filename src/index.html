@@ -1542,10 +1542,21 @@ function makeEdgeScroller(wrap, onScrolled) {
 /* ============================================================
    3. ブック読み込み
    ============================================================ */
+/** CSV は文字コードを判別してから文字列として読む（BOM なし UTF-8 / Shift_JIS の文字化け防止） */
+function decodeCsv(bytes) {
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch (e) { /* UTF-8 でなければ Excel の書く Shift_JIS として読む */ }
+  try { return new TextDecoder("shift_jis").decode(bytes); }
+  catch (e2) { return new TextDecoder("utf-8").decode(bytes); }
+}
 function readWorkbook(data, name) {
   var wb;
   try {
-    wb = XLSX.read(data, { type: "array", cellStyles: true, cellDates: true, cellNF: true });
+    if (/\.(csv|txt)$/i.test(name || "")) {
+      wb = XLSX.read(decodeCsv(data), { type: "string", cellStyles: true, cellDates: true, cellNF: true });
+    } else {
+      wb = XLSX.read(data, { type: "array", cellStyles: true, cellDates: true, cellNF: true });
+    }
   } catch (e) {
     showLoadError("Excelとして解析できませんでした", String(e && e.message || e));
     return false;
@@ -4765,24 +4776,51 @@ var PY_RUNNER = [
   "",
   "# ── 5. 組み立て ──────────────────────────────────────────",
   "def _csv_value(s: str):",
-  "    \"\"\"CSV の 1 マスを、画面と同じ感覚の型にする（数字は数値、年つきの日付は日付）。\"\"\"",
+  "    \"\"\"CSV の 1 マスを、画面（SheetJS）と同じ解釈にする。(値, 書式) を返す。",
+  "",
+  "    数字は数値、TRUE/FALSE（大文字だけ）は真偽値、(500) は -500、45% は 0.45、",
+  "    年つきの日付・日時は日付。年なしの 8/1 は画面と同じく 2001 年扱いになるので、",
+  "    日付には年を入れておくのが安全。",
+  "    \"\"\"",
   "    t = s.strip()",
   "    if t == \"\":",
-  "        return None",
-  "    m = re.fullmatch(r\"(\\d{4})[/\\-](\\d{1,2})[/\\-](\\d{1,2})\", t)",
+  "        return None, None",
+  "    if t in (\"TRUE\", \"FALSE\"):",
+  "        return t == \"TRUE\", None",
+  "    m = re.fullmatch(r\"(\\d{4})[/\\-](\\d{1,2})[/\\-](\\d{1,2})\"",
+  "                     r\"(?:[ T](\\d{1,2}):(\\d{2})(?::(\\d{2}))?)?\", t)",
   "    if m:",
   "        try:",
-  "            return _dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))",
+  "            if m.group(4) is not None:",
+  "                return _dt.datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)),",
+  "                                    int(m.group(4)), int(m.group(5)),",
+  "                                    int(m.group(6) or 0)), \"yyyy/m/d h:mm\"",
+  "            return _dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3))), \"yyyy/m/d\"",
   "        except ValueError:",
-  "            return s",
+  "            return s, None",
+  "    m = re.fullmatch(r\"(\\d{1,2})/(\\d{1,2})\", t)",
+  "    if m:",
+  "        try:",
+  "            return _dt.date(2001, int(m.group(1)), int(m.group(2))), \"yyyy/m/d\"",
+  "        except ValueError:",
+  "            return s, None",
+  "    num, neg, pct = t, False, False",
+  "    if len(num) > 2 and num[0] == \"(\" and num[-1] == \")\":",
+  "        num, neg = num[1:-1], True",
+  "    if num.endswith(\"%\"):",
+  "        num, pct = num[:-1], True",
+  "    if re.fullmatch(r\"-?\\d{1,3}(,\\d{3})+(\\.\\d+)?\", num):",
+  "        num = num.replace(\",\", \"\")",
   "    try:",
-  "        return int(t)",
+  "        val = int(num)",
   "    except ValueError:",
-  "        pass",
-  "    try:",
-  "        return float(t)",
-  "    except ValueError:",
-  "        return s",
+  "        try:",
+  "            val = float(num)",
+  "        except ValueError:",
+  "            return s, None",
+  "    if pct:",
+  "        val = val / 100.0",
+  "    return (-val if neg else val), (\"0%\" if pct else None)",
   "",
   "",
   "def _load_csv(path: str):",
@@ -4807,11 +4845,11 @@ var PY_RUNNER = [
   "    ws.title = \"Sheet1\"",
   "    for r, row in enumerate(csv.reader(io.StringIO(text), dialect), start=1):",
   "        for c, v in enumerate(row, start=1):",
-  "            val = _csv_value(v)",
+  "            val, fmt = _csv_value(v)",
   "            if val is not None:",
   "                cell = ws.cell(row=r, column=c, value=val)",
-  "                if isinstance(val, _dt.date):",
-  "                    cell.number_format = \"yyyy/m/d\"",
+  "                if fmt:",
+  "                    cell.number_format = fmt",
   "    book._csv = True                          # シート名ちがいを許すための目印",
   "    return book",
   "",

@@ -1074,6 +1074,85 @@ if (!pyReady) {
   check("逃がしたことを知らせる", /には書けなかったので/.test(ranSave), ranSave.trim().slice(0, 160));
   check("ファイルを作らずに中身だけ受け取れる",
     Number((ranSave.match(/BYTES (\d+)/) || [])[1] || 0) > 3000, (ranSave.match(/BYTES \d+/) || [])[0]);
+
+  // ---- 型の総当たり: 画面と Python の出力が 1 セルも食い違わないこと ----
+  // カンマ区切り・%・(500)・年なし日付・指数・TRUE・ゼロ埋め・数式のキャッシュ値・Shift_JIS
+  const st = join(tmp, "stress");
+  mkdirSync(st, { recursive: true });
+  writeFileSync(join(st, "検証.csv"), [
+    "日付,支店,金額,備考",
+    '2026-08-01,東京,"1,234",通常',
+    "2026/8/2,大阪,45%,率",
+    "2026/8/3 12:34,名古屋,(500),かっこ負数",
+    "8/4,福岡,08,年なし日付とゼロ埋め",
+    ",空行あり,,TRUE",
+    "2026-08-07,仙台,-12.5,ふつうの負数",
+  ].join("\n"));
+  execFileSync("python3", ["-c",
+    `open(r"${join(st, "検証sjis.csv")}","w",encoding="cp932").write(open(r"${join(st, "検証.csv")}",encoding="utf-8").read())`]);
+  const mixWs = {
+    A1: { t: "s", v: "項目" }, B1: { t: "s", v: "値" },
+    A2: { t: "s", v: "数式" }, B2: { t: "n", v: 84, f: "42*2" },
+    A3: { t: "s", v: "日付" }, B3: { t: "n", v: 46235, z: "yyyy/m/d" },
+    A4: { t: "s", v: "真偽" }, B4: { t: "b", v: true },
+    A5: { t: "s", v: "小数" }, B5: { t: "n", v: 0.1234567, z: "0.00" },
+    A6: { t: "s", v: "文字の数字" }, B6: { t: "s", v: "0123" },
+    "!ref": "A1:B6",
+  };
+  const mixWb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(mixWb, mixWs, "混在");
+  writeFileSync(join(st, "混在.xlsx"), Buffer.from(XLSX.write(mixWb, { bookType: "xlsx", type: "array" })));
+  await page.setInputFiles("#fileInput", [join(st, "検証.csv"), join(st, "検証sjis.csv"), join(st, "混在.xlsx")]);
+  await page.waitForFunction(() => window.__app.S.files.length >= 4, { timeout: 20000 });
+  check("BOMなしUTF-8のCSVが文字化けしない", await page.evaluate(() => {
+    const sh = window.__app.S.sheets.filter((s2, i) => window.__app.S.files[s2.file].name === "検証.csv")[0];
+    return sh && sh.ws.A1 && sh.ws.A1.v === "日付";
+  }));
+  check("Shift_JISのCSVも文字化けしない", await page.evaluate(() => {
+    const sh = window.__app.S.sheets.filter((s2) => window.__app.S.files[s2.file].name === "検証sjis.csv")[0];
+    return sh && sh.ws.B2 && sh.ws.B2.v === "東京";
+  }));
+  await page.evaluate(() => {
+    const A = window.__app;
+    A.S.out = []; A.S.selBlock = null;
+    A.runScript(`シート追加 総当たり
+[検証.csv]Sheet1の全体を総当たりのA1に置く
+[検証sjis.csv]Sheet1の全体を総当たりのA10に置く
+混在の全体を総当たりのF1に置く`, true);
+  });
+  await page.waitForTimeout(250);
+  const [dlSt] = await Promise.all([page.waitForEvent("download"), page.click("#btnGen")]);
+  await dlSt.saveAs(join(st, "by-ui.xlsx"));
+  await page.evaluate(() => window.__app.openScript(true));
+  await page.click("#scPy");
+  await page.waitForTimeout(150);
+  await page.fill("#pyOut", "by-python.xlsx");
+  const [dlStPy] = await Promise.all([page.waitForEvent("download"), page.click("#pyOk")]);
+  await dlStPy.saveAs(join(st, "extract.py"));
+  await page.evaluate(() => window.__app.openScript(false));
+  let ranSt = "";
+  try { ranSt = execFileSync("python3", ["extract.py"], { cwd: st, encoding: "utf8" }); }
+  catch (e) { ranSt = "ERROR " + (e.stderr || e.message); }
+  check("総当たりの Python が走る", /書き出しました/.test(ranSt), ranSt.trim().slice(0, 120));
+  const stUi = XLSX.read(readFileSync(join(st, "by-ui.xlsx")), { type: "buffer" }).Sheets["総当たり"];
+  const stPy = XLSX.read(readFileSync(join(st, "by-python.xlsx")), { type: "buffer" }).Sheets["総当たり"];
+  let stDiff = 0, stCells = 0, stFirst = "";
+  const stRg = XLSX.utils.decode_range(stUi["!ref"]);
+  const stNorm = (v) => (v instanceof Date ? v.toISOString().slice(0, 10)
+    : typeof v === "number" ? Math.round(v * 1e6) / 1e6 : v === undefined || v === "" ? null : v);
+  for (let r = stRg.s.r; r <= stRg.e.r; r++) {
+    for (let c = stRg.s.c; c <= stRg.e.c; c++) {
+      const ad = XLSX.utils.encode_cell({ r, c });
+      stCells++;
+      const va = stNorm(stUi[ad] && stUi[ad].v), vb = stNorm(stPy[ad] && stPy[ad].v);
+      if (JSON.stringify(va) !== JSON.stringify(vb)) {
+        if (!stFirst) stFirst = `${ad} ${JSON.stringify(va)} vs ${JSON.stringify(vb)}`;
+        stDiff++;
+      }
+    }
+  }
+  check("型の総当たりでも 1 セルも食い違わない", stDiff === 0,
+    `${stCells}セル中 ${stDiff}件ちがう ${stFirst}`);
 }
 await page.evaluate(() => window.__app.openScript(false));
 await loadSampleAgain();
