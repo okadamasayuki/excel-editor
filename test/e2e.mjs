@@ -466,6 +466,10 @@ check("上下に挿入できるメニューになっている",
 await page.click(".hmenu button >> nth=0");                     // 上に 1行 挿入
 await page.waitForTimeout(200);
 check("5行目より下に始まるブロックだけ下がる", (await insPos()) === "0,0 0,6 6,0", await insPos());
+check("挿入した位置が Python の書き出しにもそのまま入る", await page.evaluate(() => {
+  const code = window.__app.pythonFromBlocks("x.xlsx");
+  return code.includes('"at": "A7"');   // dr=6 → A7 に移っている
+}));
 check("またいでいるブロックは動かないと知らせる",
   /またいでいる 1個はそのまま/.test(await page.textContent("#toasts")),
   (await page.textContent("#toasts")).slice(-80));
@@ -516,6 +520,40 @@ check("動かない理由を知らせる",
   /始まるブロックや入力がないので/.test(await page.textContent("#toasts")),
   (await page.textContent("#toasts")).slice(-80));
 await page.keyboard.press("Escape");
+
+// お知らせ（トースト）がドラッグ＆ドロップを横取りしないこと
+// （積み重なった通知が出力シートに被さり、その下へのドロップを妨げていた）
+await page.evaluate(() => { for (let i = 0; i < 6; i++) window.__app.toast("通知テスト " + i); });
+check("通知は積み上がりすぎない（古いものから消える）",
+  (await page.locator("#toasts .toast").count()) <= 4,
+  String(await page.locator("#toasts .toast").count()));
+check("通知はマウスを受け取らない（下のセルへ落とせる）", await page.evaluate(() =>
+  getComputedStyle(document.getElementById("toasts")).pointerEvents === "none"));
+{
+  await page.evaluate(() => window.__app.setSelection(0, 0, 1, 1));
+  await page.waitForTimeout(120);
+  const before = await page.evaluate(() => window.__app.S.out[window.__app.S.activeOut].blocks.length);
+  const sel = await page.locator("#srcGrid .selbox").boundingBox();
+  const t = await page.evaluate(() => {
+    const r = document.getElementById("toasts").getBoundingClientRect();
+    return { x: r.x + 40, y: r.y + 20 };                        // 通知の真下のセルに落とす
+  });
+  await page.mouse.move(sel.x + sel.width / 2, sel.y + sel.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(t.x, t.y, { steps: 12 });
+  await page.mouse.move(t.x + 2, t.y + 2, { steps: 3 });
+  await page.mouse.up();
+  await page.waitForTimeout(250);
+  const after = await page.evaluate(() => window.__app.S.out[window.__app.S.activeOut].blocks.length);
+  check("通知が出ていても、その下へドロップできる", after > before, `${before} → ${after}`);
+  if (after > before) {
+    await page.evaluate(() => {                                  // 片づけ
+      const o = window.__app.S.out[window.__app.S.activeOut];
+      o.blocks.pop();
+    });
+  }
+  await page.evaluate(() => { document.getElementById("toasts").innerHTML = ""; });
+}
 
 // ---- 7b3. 出力シートへの直接入力とフィル ---------------------------------
 // セルに値・数式・日付を打ち込み、フィルハンドルで続きを引っぱる

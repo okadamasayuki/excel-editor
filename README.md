@@ -211,7 +211,7 @@ test/fixtures/    色・非表示・列幅つきの検証用ブック（openpyxl
 
 ```sh
 node build.mjs     # docs/index.html と dist/index.html を生成
-node test/e2e.mjs  # ブラウザで通しテスト（416項目）＋ スクリーンショット
+node test/e2e.mjs  # ブラウザで通しテスト（420項目）＋ スクリーンショット
 ```
 
 テストは生成された `.xlsx` を SheetJS で読み直し、値・型・配置先セルまで照合する。
