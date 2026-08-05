@@ -537,12 +537,12 @@ body.stacked .splitter::after {
 
 /* ドロップ中のゴースト */
 .dropghost {
-  position: absolute; border: 1.5px dashed var(--dst); background: var(--dst-soft);
+  position: absolute; border: 1.5px dashed var(--src); background: var(--src-soft);
   border-radius: 1px; z-index: 7;
 }
 .dropghost .lbl {
   position: absolute; top: -11px; left: 0; height: 18px; padding: 0 7px;
-  border-radius: 100px 100px 100px 2px; background: var(--dst); color: #fff;
+  border-radius: 100px 100px 100px 2px; background: var(--src); color: #fff;
   font-size: 10.5px; font-weight: 700; font-family: var(--font-mono); white-space: nowrap;
   display: flex; align-items: center;
 }
@@ -551,6 +551,12 @@ body.stacked .splitter::after {
 :root[data-theme="light"] .dropghost .lbl { color: #fff; }
 
 /* ドラッグ中の縁取りは出さない（点線のゴーストだけで分かるため） */
+/* ドラッグ中、つかんだ箱がカーソルについてくる（選択と同じ色のまま） */
+.dragfloat {
+  position: fixed; z-index: 80; pointer-events: none;
+  border: 1.6px solid var(--src); background: var(--src-soft);
+  border-radius: 1px; opacity: .9;
+}
 
 /* ============================================================
    空状態 / ドロップゾーン
@@ -2767,11 +2773,44 @@ var dragPayload = null;
    地球アイコンの代替画像を出すので、読み込み済みの透明 GIF を使う */
 var DRAG_BLANK = new Image();
 DRAG_BLANK.src = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+var dragFloatEl = null, dragFloatOff = { x: 0, y: 0 };
+function removeDragFloat() {
+  if (dragFloatEl && dragFloatEl.parentNode) dragFloatEl.parentNode.removeChild(dragFloatEl);
+  dragFloatEl = null;
+}
 function hideDragImage(e) {
   if (e.dataTransfer && e.dataTransfer.setDragImage && DRAG_BLANK.complete) {
     e.dataTransfer.setDragImage(DRAG_BLANK, 0, 0);
   }
+  // かわりに、つかんだ箱と同じ大きさの箱をカーソルにつけて出す
+  var src = e.currentTarget;
+  var r = src && src.getBoundingClientRect ? src.getBoundingClientRect() : null;
+  if (!r || !r.width) return;
+  removeDragFloat();
+  dragFloatEl = el("div", "dragfloat");
+  var w = Math.min(r.width, 480), h = Math.min(r.height, 320);
+  dragFloatEl.style.width = w + "px";
+  dragFloatEl.style.height = h + "px";
+  dragFloatOff = {
+    x: Math.min(Math.max(e.clientX - r.left, 0), w),
+    y: Math.min(Math.max(e.clientY - r.top, 0), h)
+  };
+  dragFloatEl.style.left = (e.clientX - dragFloatOff.x) + "px";
+  dragFloatEl.style.top = (e.clientY - dragFloatOff.y) + "px";
+  document.body.appendChild(dragFloatEl);
 }
+// カーソルを追いかける。出力シートの上では、セルに吸い付く点線に役目を渡す
+document.addEventListener("dragover", function (e) {
+  if (!dragFloatEl) return;
+  var overDst = !!(e.target && e.target.closest && e.target.closest("#dstGrid"));
+  dragFloatEl.style.display = overDst ? "none" : "";
+  if (!overDst) {
+    dragFloatEl.style.left = (e.clientX - dragFloatOff.x) + "px";
+    dragFloatEl.style.top = (e.clientY - dragFloatOff.y) + "px";
+  }
+}, true);
+document.addEventListener("dragend", removeDragFloat, true);
+document.addEventListener("drop", removeDragFloat, true);
 var ghostEl = null;
 var dstScroller = null;
 

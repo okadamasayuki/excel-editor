@@ -169,9 +169,24 @@ const grab = await page.locator("#srcGrid .selbox").boundingBox();
 const dstCell = await page.locator('#dstGrid .gc[data-r="2"][data-c="1"]').boundingBox();
 await page.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2);
 await page.mouse.down();
+await page.mouse.move(grab.x + grab.width / 2 + 50, grab.y + 24, { steps: 5 });   // まだ元データ側
+check("ドラッグ中、つかんだ箱がカーソルについてくる", await page.evaluate(() => {
+  const f = document.querySelector(".dragfloat");
+  return !!f && f.style.display !== "none";
+}));
 await page.mouse.move(dstCell.x + 20, dstCell.y + 10, { steps: 12 });
+check("出力側では、箱が消えてセルに吸い付く点線になる", await page.evaluate(() => {
+  const f = document.querySelector(".dragfloat");
+  return f && f.style.display === "none" && !!document.querySelector(".dropghost");
+}));
+check("点線は選択と同じ色（途中で色が変わらない）", await page.evaluate(() => {
+  const g = getComputedStyle(document.querySelector(".dropghost")).borderTopColor;
+  const s2 = getComputedStyle(document.querySelector("#srcGrid .selbox")).borderTopColor;
+  return g === s2;
+}));
 await page.mouse.move(dstCell.x + 22, dstCell.y + 12, { steps: 3 });
 await page.mouse.up();
+check("落としたら、ついてきた箱は消える", await page.evaluate(() => !document.querySelector(".dragfloat")));
 let blocks = await page.$$eval("#blockList .block-card .src", (ns) => ns.map((n) => n.textContent));
 check("ドラッグ＆ドロップでブロックが1件できる", blocks.length === 1, blocks.join(","));
 let dest = await page.$$eval("#blockList .block-card .row2 .to", (ns) => ns.map((n) => n.textContent));
